@@ -65,7 +65,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 .spinner { width: 16px; height: 16px; border: 2px solid rgba(0,0,0,0.1); border-left-color: var(--green); border-radius: 50%; animation: spin 1s linear infinite; display: inline-block; margin-right: 8px; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.progress-bar { height: 4px; width: 0%; background: var(--green); margin-top: 8px; transition: width 0.3s; border-radius: 2px; }
+.progress-bar-container { height: 6px; width: 100%; background: rgba(0,0,0,0.05); margin-top: 8px; border-radius: 3px; overflow: hidden; }
+.progress-bar { height: 100%; width: 0%; background: var(--green); transition: width 0.4s ease; }
 </style>
 </head>
 <body>
@@ -93,15 +94,17 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
       <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
       <div style="font-weight: 500;">點擊或拖曳檔案</div>
-      <div style="font-size: 12px; color: var(--text-3);">支援超大 MP4 (防呆除錯版)</div>
+      <div style="font-size: 12px; color: var(--text-3);">支援大型 MP4 (全面 Blob 化修復)</div>
       <input type="file" id="fileInput" hidden onchange="handleFileUpload(this.files[0])">
     </div>
   </div>
 
   <div id="statusCard">
     <div class="spinner"></div>
-    <span id="statusText" style="font-size: 13px; color: var(--blue);">準備中...</span>
-    <div id="pBar" class="progress-bar"></div>
+    <span id="statusText" style="font-size: 13px; color: var(--blue); font-weight: 500;">準備中...</span>
+    <div class="progress-bar-container">
+      <div id="pBar" class="progress-bar"></div>
+    </div>
   </div>
 </div>
 
@@ -122,10 +125,10 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 【新增】引入 COI Service Worker 以啟用 SharedArrayBuffer (必須放在最前面) -->
+<!-- 必須放在腳本最前面，以啟用 Cross-Origin Isolation -->
 <script src="coi-serviceworker.js"></script>
 
-<!-- 統一使用穩定的 jsdelivr CDN -->
+<!-- FFmpeg 主程式 -->
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
 
 <script>
@@ -133,19 +136,19 @@ const { FFmpeg } = window.FFmpegWASM;
 const ffmpeg = new FFmpeg();
 let subs = [];
 
-const CHUNK_DURATION = 1200; 
-const OVERLAP_DURATION = 5;  
+const CHUNK_DURATION = 1200; // 每段處理 20 分鐘
+const OVERLAP_DURATION = 5;  // 重疊 5 秒以防斷句
 
-// 優化資源下載：使用更安全的 Blob 處理方式
+// 強化的資源載入器：將所有資源轉換為 BlobURL 以解決跨域隔離載入問題
 async function toBlobURL(url, mimeType) {
     try {
         const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`網路請求失敗 HTTP ${resp.status} - ${url}`);
-        const blob = await resp.blob(); // 直接取用 blob，避免 arrayBuffer 的記憶體超載
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} - ${url}`);
+        const blob = await resp.blob();
         return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     } catch (err) {
         console.error("下載依賴資源失敗:", url, err);
-        throw new Error(`無法下載模組: ${url}\n原因: ${err.message}`);
+        throw new Error(`資源載入失敗: ${url}\n請檢查網路連線或 CORS 設定。`);
     }
 }
 
@@ -155,114 +158,89 @@ function updateStatus(text, show = true, progress = null) {
     const pBar = document.getElementById('pBar');
     if (!card) return;
     card.style.display = show ? 'block' : 'none';
-    msg.textContent = text;
-    if (progress !== null) pBar.style.width = progress + '%';
+    if (text) msg.textContent = text;
+    if (progress !== null) {
+        pBar.style.width = Math.min(progress, 100) + '%';
+    }
 }
 
 async function handleFileUpload(file) {
     if (!file) return;
     const apiKey = document.getElementById('apiKey').value.trim();
-    if (!apiKey) return alert("請輸入 OpenAI API Key");
+    if (!apiKey) return alert("請先輸入 OpenAI API Key");
 
-    if (typeof window.WebAssembly === 'undefined') {
-        return alert("錯誤：您的瀏覽器不支援 WebAssembly，無法執行此工具！請更換為最新版的 Chrome 或 Edge。");
-    }
-
-    let inputPath = 'input_vid';
     let isMounted = false;
+    let inputPath = '';
 
     try {
-        updateStatus("【階段 1】下載底層引擎...", true, 2);
+        updateStatus("【1/5】下載編碼器核心資源...", true, 2);
         
         if (!ffmpeg.loaded) {
-            let workerURL;
-            try {
-                // 重大修復：只對 Worker 腳本 (100KB) 進行 Blob 化，避免 30MB 的 WASM 檔塞爆記憶體！
-                const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
-                const ffmpegURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd';
-                
-                // 僅轉換這一個檔案來繞過跨域限制
-                workerURL = await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript');
-
-                updateStatus("【階段 2】啟動引擎...", true, 8);
-                await ffmpeg.load({
-                    // 核心檔直接透過網址讀取，不佔用本地 Blob 記憶體
-                    coreURL: `${baseURL}/ffmpeg-core.js`,
-                    wasmURL: `${baseURL}/ffmpeg-core.wasm`,
-                    classWorkerURL: workerURL
-                });
-            } catch (loadErr) {
-                throw new Error("【啟動階段失敗】\n" + (loadErr.message || loadErr.toString()) + "\n這通常是因為瀏覽器安全政策或記憶體不足。");
-            }
-        }
-
-        updateStatus("【階段 3】掛載影片 (串流模式)...", true, 10);
-        
-        try {
-            const safeFile = new File([file], "input_vid.mp4", { type: file.type || "video/mp4" });
-            await ffmpeg.createDir('/work');
+            const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+            const ffmpegURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd';
             
-            try {
-                await ffmpeg.mount('WORKERFS', { files: [safeFile] }, '/work');
-            } catch (e1) {
-                await ffmpeg.mount('WORKERFS', { blobs: [{ name: 'input_vid.mp4', data: safeFile }] }, '/work');
-            }
-            inputPath = '/work/input_vid.mp4';
-            isMounted = true;
-            console.log("WORKERFS 掛載成功！");
-        } catch (mountErr) {
-            console.warn("WORKERFS 失敗，嘗試回退至記憶體寫入:", mountErr);
-            try {
-                updateStatus("警告：切換至記憶體載入模式，若檔案過大可能崩潰...", true, 15);
-                const fileData = await file.arrayBuffer();
-                await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
-                inputPath = 'input_vid';
-            } catch (memErr) {
-                throw new Error("【記憶體不足】影片檔案過大，您的瀏覽器無法承受。");
-            }
+            // 關鍵修復：在開啟 COI 的嚴格環境下，必須將所有核心腳本轉為同源 Blob。
+            const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
+            const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+            const workerURL = await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript');
+
+            updateStatus("【2/5】啟動 WebAssembly 引擎...", true, 8);
+            await ffmpeg.load({
+                coreURL: coreURL,
+                wasmURL: wasmURL,
+                classWorkerURL: workerURL
+            });
         }
 
-        let duration = 0;
-        const logCallback = ({ message }) => {
-            const match = message.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
-            if (match) {
-                duration = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]);
-            }
-        };
+        updateStatus("【3/5】掛載影片中...", true, 12);
         
-        ffmpeg.on('log', logCallback);
-        await ffmpeg.exec(['-i', inputPath]); 
-        ffmpeg.off('log', logCallback); 
-
-        if (duration === 0) {
-            duration = 600; 
-        }
-
-        updateStatus("【階段 4】壓縮並提取音軌...", true, 20);
         try {
-            await ffmpeg.exec([
-                '-i', inputPath, 
-                '-vn', 
-                '-acodec', 'libmp3lame', 
-                '-b:a', '64k', 
-                '-ar', '16000', 
-                'full_audio.mp3'
-            ]);
-        } catch (execErr) {
-            throw new Error("【轉碼階段失敗】無法從您的影片中提取音訊。");
+            // 嘗試使用 WORKERFS 模式（最省記憶體，適合大型影片）
+            await ffmpeg.createDir('/work');
+            await ffmpeg.mount('WORKERFS', { files: [file] }, '/work');
+            inputPath = `/work/${file.name}`;
+            isMounted = true;
+            console.log("WORKERFS 掛載成功");
+        } catch (mountErr) {
+            console.warn("WORKERFS 掛載失敗，回退至記憶體模式", mountErr);
+            const fileData = await file.arrayBuffer();
+            await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
+            inputPath = 'input_vid';
         }
-        
+
+        // 偵測影片時長
+        let duration = 0;
+        const durationLogger = ({ message }) => {
+            const match = message.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
+            if (match) duration = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]);
+        };
+        ffmpeg.on('log', durationLogger);
+        await ffmpeg.exec(['-i', inputPath]);
+        ffmpeg.off('log', durationLogger);
+
+        if (duration === 0) duration = 600; 
+
+        updateStatus("【4/5】壓縮並提取音軌...", true, 20);
+        await ffmpeg.exec([
+            '-i', inputPath, 
+            '-vn', 
+            '-acodec', 'libmp3lame', 
+            '-b:a', '64k', 
+            '-ar', '16000', 
+            'full_audio.mp3'
+        ]);
+
+        // 開始分段辨識
         let currentStart = 0;
-        let index = 1;
+        let chunkIndex = 1;
         let fullSrtContent = "";
         const totalChunks = Math.ceil(duration / CHUNK_DURATION);
 
         while (currentStart < duration) {
-            const p = Math.floor(20 + (index / totalChunks) * 75);
-            updateStatus(`【階段 5】切分並辨識第 ${index}/${totalChunks} 段...`, true, p);
+            const progress = 25 + Math.floor((chunkIndex / totalChunks) * 70);
+            updateStatus(`【5/5】處理段落 ${chunkIndex}/${totalChunks}...`, true, progress);
             
-            const chunkName = `c_${index}.mp3`;
-            
+            const chunkName = `c_${chunkIndex}.mp3`;
             await ffmpeg.exec([
                 '-ss', currentStart.toString(), 
                 '-t', (CHUNK_DURATION + OVERLAP_DURATION).toString(), 
@@ -272,33 +250,34 @@ async function handleFileUpload(file) {
             ]);
 
             const chunkData = await ffmpeg.readFile(chunkName);
-            
             if (chunkData.length > 5000) {
                 const chunkBlob = new Blob([chunkData.buffer], { type: 'audio/mpeg' });
-                updateStatus(`AI 辨識中 (段落 ${index})...`);
+                updateStatus(`AI 辨識中 (段落 ${chunkIndex})...`);
                 try {
                     const srtPart = await callWhisper(chunkBlob, apiKey);
                     const offsetedSrt = offsetSrt(srtPart, currentStart);
                     fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
                 } catch (apiErr) {
-                    throw new Error(`【API 請求失敗】段落 ${index}：\n` + apiErr.message);
+                    throw new Error(`OpenAI API 報錯 (段落 ${chunkIndex}): ${apiErr.message}`);
                 }
             }
 
+            // 及時清理暫存檔
+            await ffmpeg.deleteFile(chunkName);
+
             currentStart += CHUNK_DURATION;
-            index++;
-            if (index > 100) break;
+            chunkIndex++;
         }
 
-        if (!fullSrtContent) throw new Error("【處理失敗】未獲得任何字幕內容。");
+        if (!fullSrtContent) throw new Error("未能成功生成字幕內容。");
 
         parseSrt(fullSrtContent);
-        updateStatus("字幕生成成功！", true, 100);
+        updateStatus("處理完成！", true, 100);
         setTimeout(() => updateStatus("", false), 3000);
 
     } catch (err) {
-        console.error("【終極錯誤攔截】", err);
-        alert("🚨 處理中斷！請截圖此畫面回報：\n\n" + (err.message || err.toString()));
+        console.error("處理流程中斷:", err);
+        alert("發生錯誤：\n" + (err.message || err.toString()));
         updateStatus("處理失敗", false);
     } finally {
         if (isMounted) {
