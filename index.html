@@ -122,6 +122,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
+<!-- 引入 FFmpeg -->
 <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
 
 <script>
@@ -129,7 +130,6 @@ const { FFmpeg } = window.FFmpegWASM;
 const ffmpeg = new FFmpeg();
 let subs = [];
 
-// 設定常數 (每段 20 分鐘，為了 API 穩定性，不建議超過此值)
 const CHUNK_DURATION = 1200; 
 const OVERLAP_DURATION = 5;  
 
@@ -153,13 +153,23 @@ async function handleFileUpload(file) {
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請輸入 OpenAI API Key");
 
+    // 安全性檢查：如果是本地檔案打開，預先提醒
+    if (window.location.protocol === 'file:') {
+        return alert("錯誤：FFmpeg 無法在 'file://' 協議下運行。\n請使用 VS Code Live Server 開啟網頁，或將其部署至 GitHub Pages。");
+    }
+
     try {
         updateStatus("載入音訊引擎...", true, 5);
         if (!ffmpeg.loaded) {
-            await ffmpeg.load({
-                coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-                wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
-            });
+            try {
+                await ffmpeg.load({
+                    coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+                    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+                });
+            } catch (loadErr) {
+                console.error("FFmpeg Load Error:", loadErr);
+                throw new Error("FFmpeg 引擎載入失敗，這通常是由於瀏覽器安全限制。請確保使用 HTTP(S) 環境開啟。");
+            }
         }
 
         updateStatus("讀取影片資訊...", true, 10);
@@ -175,11 +185,10 @@ async function handleFileUpload(file) {
         await ffmpeg.exec(['-i', 'input_vid']); 
 
         if (duration === 0) {
-            console.warn("時長抓取失敗，預設為 10 分鐘，請檢查影片格式");
+            console.warn("時長抓取失敗，預設為 10 分鐘");
             duration = 600; 
         }
 
-        // 步驟 1: 提取完整音軌並預先轉碼為標準 MP3
         updateStatus("提取並轉碼高品質音軌...", true, 20);
         await ffmpeg.exec([
             '-i', 'input_vid', 
@@ -195,31 +204,25 @@ async function handleFileUpload(file) {
         let fullSrtContent = "";
         const totalChunks = Math.ceil(duration / CHUNK_DURATION);
 
-        // 步驟 2: 分段處理
         while (currentStart < duration) {
             const p = Math.floor(20 + (index / totalChunks) * 75);
             updateStatus(`正在處理第 ${index}/${totalChunks} 段音訊...`, true, p);
             
             const chunkName = `c_${index}.mp3`;
             
-            // 重要：再次確保切割時強制指定 mp3 編碼格式，避免 API 報格式錯誤
             await ffmpeg.exec([
                 '-ss', currentStart.toString(), 
                 '-t', (CHUNK_DURATION + OVERLAP_DURATION).toString(), 
                 '-i', 'full_audio.mp3', 
-                '-acodec', 'libmp3lame',
-                '-b:a', '64k',
+                '-acodec', 'copy', // 直接複製 mp3 串流，速度最快
                 chunkName
             ]);
 
             const chunkData = await ffmpeg.readFile(chunkName);
-            console.log(`[DEBUG] 段落 ${index} 實際位元組:`, chunkData.length);
+            console.log(`[DEBUG] 段落 ${index} 位元組:`, chunkData.length);
 
-            if (chunkData.length < 5000) {
-                console.warn(`段落 ${index} 太小，可能無聲或損毀，略過`);
-            } else {
+            if (chunkData.length > 5000) {
                 const chunkBlob = new Blob([chunkData.buffer], { type: 'audio/mpeg' });
-                
                 updateStatus(`AI 辨識中 (段落 ${index})...`);
                 try {
                     const srtPart = await callWhisper(chunkBlob, apiKey);
@@ -232,10 +235,10 @@ async function handleFileUpload(file) {
 
             currentStart += CHUNK_DURATION;
             index++;
-            if (index > 100) break; // 防止異常長時間導致瀏覽器崩潰
+            if (index > 100) break;
         }
 
-        if (!fullSrtContent) throw new Error("API 辨識失敗，未獲得任何字幕內容。");
+        if (!fullSrtContent) throw new Error("未獲得任何字幕內容。");
 
         parseSrt(fullSrtContent);
         updateStatus("字幕生成成功！", true, 100);
@@ -243,14 +246,13 @@ async function handleFileUpload(file) {
 
     } catch (err) {
         console.error("處理出錯:", err);
-        alert("處理過程中發生錯誤：" + err.message);
+        alert("錯誤：" + err.message);
         updateStatus("處理終止", false);
     }
 }
 
 async function callWhisper(blob, key) {
     const formData = new FormData();
-    // 關鍵修復：檔名必須明確為 .mp3，這能協助 OpenAI 識別格式
     formData.append("file", blob, "chunk.mp3");
     formData.append("model", "whisper-1");
     formData.append("response_format", "srt");
@@ -277,7 +279,6 @@ function offsetSrt(srtText, offsetSeconds) {
         let [hms, ms] = match.split(',');
         let [h, m, s] = hms.split(':').map(Number);
         let totalMs = (h * 3600 + m * 60 + s) * 1000 + Number(ms) + (offsetSeconds * 1000);
-        
         if (totalMs < 0) totalMs = 0;
         let nh = Math.floor(totalMs / 3600000).toString().padStart(2, '0');
         let nm = Math.floor((totalMs % 3600000) / 60000).toString().padStart(2, '0');
@@ -310,12 +311,10 @@ function parseSrt(text) {
 function render() {
     const list = document.getElementById('subList');
     document.getElementById('sCount').textContent = subs.length;
-    
     if (subs.length === 0) {
         list.innerHTML = `<div style="text-align: center; color: var(--text-3); margin-top: 100px;">等待處理中...</div>`;
         return;
     }
-
     list.innerHTML = subs.map((s, i) => `
         <div class="sub-item">
             <div class="time-box">
@@ -332,7 +331,6 @@ function render() {
 
 function deleteSub(index) {
     subs.splice(index, 1);
-    // 重新排序 ID
     subs.forEach((s, idx) => s.id = idx + 1);
     render();
 }
@@ -346,7 +344,6 @@ function addSub() {
         text: ''
     });
     render();
-    // 自動滾動到底部
     const list = document.getElementById('subList');
     list.scrollTop = list.scrollHeight;
 }
