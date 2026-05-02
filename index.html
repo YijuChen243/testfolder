@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>字幕工坊 — 影片轉字幕 (相容模式版)</title>
+<title>字幕工坊 — 影片轉字幕 (相容模式修正版)</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -78,7 +78,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 
   <div class="info-banner">
-    ✅ 已切換至「相容模式」：無需特殊安全環境，適用於一般網頁空間。
+    ✅ 已切換至「相容模式」：無需特殊安全環境，修正了核心引擎啟動問題。
   </div>
 
   <div class="card">
@@ -129,19 +129,23 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 使用 FFmpeg 0.11 版本，此版本對單線程環境支援較好且較穩定 -->
+<!-- 使用 FFmpeg 0.11 版本 -->
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 
 <script>
-const { createFFmpeg, fetchFile } = FFmpeg;
-const ffmpeg = createFFmpeg({ 
-    log: false,
-    // 關鍵設定：強制不載入多線程 worker，避免 SharedArrayBuffer 問題
-    mainName: 'main'
-});
+// 修正 0.11 版本的初始化引用方式
+let ffmpeg = null;
+
+function getFFmpeg() {
+    if (ffmpeg) return ffmpeg;
+    // 0.11 版本中 createFFmpeg 是在 FFmpeg 全域變數下
+    const { createFFmpeg } = window.FFmpeg;
+    ffmpeg = createFFmpeg({ log: true });
+    return ffmpeg;
+}
 
 let subs = [];
-const CHUNK_DURATION = 1200; 
+const CHUNK_DURATION = 600; // 縮短每段時長以提高單線程處理的成功率
 
 function updateStatus(text, show = true, progress = null) {
     const card = document.getElementById('statusCard');
@@ -158,35 +162,35 @@ async function handleFileUpload(file) {
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請先輸入 OpenAI API Key");
 
+    const instance = getFFmpeg();
+
     try {
         updateStatus("【1/5】正在啟動引擎...", true, 5);
         
-        if (!ffmpeg.isLoaded()) {
-            await ffmpeg.load();
+        if (!instance.isLoaded()) {
+            await instance.load();
         }
 
         updateStatus("【2/5】載入影片中...", true, 15);
-        ffmpeg.FS('writeFile', 'input_vid', await fetchFile(file));
+        const { fetchFile } = window.FFmpeg;
+        instance.FS('writeFile', 'input_vid', await fetchFile(file));
 
-        updateStatus("【3/5】提取音軌 (相容模式)...", true, 30);
-        // 使用更簡單的參數以增加相容性
-        await ffmpeg.run('-i', 'input_vid', '-vn', '-acodec', 'libmp3lame', '-b:a', '64k', 'full_audio.mp3');
+        updateStatus("【3/5】提取音軌...", true, 30);
+        // 單線程模式下，轉檔會耗費一點時間
+        await instance.run('-i', 'input_vid', '-vn', '-acodec', 'libmp3lame', '-b:a', '64k', '-ar', '16000', 'full_audio.mp3');
 
-        // 讀取音檔獲取大約時長（簡單做法，或者由檔案大小估計）
-        // 在相容模式下，我們直接開始切片處理
-        
         let currentStart = 0;
         let chunkIndex = 1;
         let fullSrtContent = "";
-
-        // 注意：單線程模式下無法精確偵測 Duration，我們用迴圈嘗試直到失敗為止
         let hasMore = true;
+
         while (hasMore) {
-            updateStatus(`【4/5】處理段落 ${chunkIndex}...`, true, 40 + (chunkIndex * 5));
+            updateStatus(`【4/5】切割段落 ${chunkIndex}...`, true, 40 + (chunkIndex * 2));
             
             const chunkName = `c_${chunkIndex}.mp3`;
             try {
-                await ffmpeg.run(
+                // 使用 -y 強制覆蓋，避免對話框阻塞
+                await instance.run(
                     '-ss', currentStart.toString(), 
                     '-t', CHUNK_DURATION.toString(), 
                     '-i', 'full_audio.mp3', 
@@ -194,8 +198,8 @@ async function handleFileUpload(file) {
                     chunkName
                 );
 
-                const data = ffmpeg.FS('readFile', chunkName);
-                if (data.length < 1000) {
+                const data = instance.FS('readFile', chunkName);
+                if (data.length < 2000) { // 檔案太小代表沒內容了
                     hasMore = false;
                 } else {
                     const chunkBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
@@ -204,19 +208,19 @@ async function handleFileUpload(file) {
                     const offsetedSrt = offsetSrt(srtPart, currentStart);
                     fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
                     
-                    ffmpeg.FS('unlink', chunkName);
+                    instance.FS('unlink', chunkName);
                     currentStart += CHUNK_DURATION;
                     chunkIndex++;
                 }
             } catch (e) {
+                console.log("Segment end reached or error:", e);
                 hasMore = false;
             }
             
-            // 安全機制，避免無限迴圈
-            if (chunkIndex > 50) hasMore = false;
+            if (chunkIndex > 100) break; // 安全上限
         }
 
-        if (!fullSrtContent) throw new Error("未能生成字幕，請確認影片是否有聲音。");
+        if (!fullSrtContent) throw new Error("未能生成字幕，請確認音軌是否提取成功。");
 
         parseSrt(fullSrtContent);
         updateStatus("辨識完成！", true, 100);
@@ -224,7 +228,7 @@ async function handleFileUpload(file) {
 
     } catch (err) {
         console.error(err);
-        alert("處理出錯：" + err.message);
+        alert("執行錯誤：" + err.message);
         updateStatus("錯誤", false);
     }
 }
@@ -234,8 +238,8 @@ async function callWhisper(blob, key) {
     formData.append("file", blob, "chunk.mp3");
     formData.append("model", "whisper-1");
     formData.append("response_format", "srt");
-    const prompt = document.getElementById('prompt').value;
-    if(prompt) formData.append("prompt", prompt);
+    const promptText = document.getElementById('prompt').value;
+    if(promptText) formData.append("prompt", promptText);
 
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
         method: "POST",
@@ -243,7 +247,10 @@ async function callWhisper(blob, key) {
         body: formData
     });
 
-    if (!res.ok) throw new Error("OpenAI API 請求失敗");
+    if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error?.message || "OpenAI API 請求失敗");
+    }
     return await res.text();
 }
 
@@ -254,6 +261,7 @@ function offsetSrt(srtText, offsetSeconds) {
         let [hms, ms] = match.split(',');
         let [h, m, s] = hms.split(':').map(Number);
         let totalMs = (h * 3600 + m * 60 + s) * 1000 + Number(ms) + (offsetSeconds * 1000);
+        if (totalMs < 0) totalMs = 0;
         let nh = Math.floor(totalMs / 3600000).toString().padStart(2, '0');
         let nm = Math.floor((totalMs % 3600000) / 60000).toString().padStart(2, '0');
         let ns = Math.floor((totalMs % 60000) / 1000).toString().padStart(2, '0');
@@ -301,6 +309,7 @@ function render() {
 
 function deleteSub(index) {
     subs.splice(index, 1);
+    subs.forEach((s, idx) => s.id = idx + 1);
     render();
 }
 
