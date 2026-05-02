@@ -134,11 +134,6 @@ let subs = [];
 const CHUNK_DURATION = 1200; 
 const OVERLAP_DURATION = 5;  
 
-const fetchFile = async (file) => {
-    if (typeof file === 'string') return new Uint8Array(await (await fetch(file)).arrayBuffer());
-    return new Uint8Array(await file.arrayBuffer());
-};
-
 function updateStatus(text, show = true, progress = null) {
     const card = document.getElementById('statusCard');
     const msg = document.getElementById('statusText');
@@ -175,7 +170,10 @@ async function handleFileUpload(file) {
         }
 
         updateStatus("讀取影片資訊...", true, 10);
-        await ffmpeg.writeFile('input_vid', await fetchFile(file));
+        
+        // 關鍵修復：改用瀏覽器原生的 arrayBuffer 讀取檔案，徹底解決 fetchFile is not defined 的問題
+        const fileData = await file.arrayBuffer();
+        await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
 
         let duration = 0;
         ffmpeg.on('log', ({ message }) => {
