@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>字幕工坊 — 影片轉字幕 (穩定修復版)</title>
+<title>字幕工坊 — 影片轉字幕</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -70,6 +70,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 
 .info-banner { background: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
 .info-banner.error { background: var(--red-bg); color: var(--red-text); border-color: var(--red-border); }
+.info-banner.loading { background: #FFF7ED; color: #92400E; border-color: #FDE68A; }
 </style>
 </head>
 <body>
@@ -80,8 +81,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     <h1>字幕工坊</h1>
   </div>
 
-  <div class="info-banner" id="securityBanner">
-    ⏳ 正在檢測組件載入狀態...
+  <div class="info-banner loading" id="securityBanner">
+    ⏳ 正在載入核心組件，請稍候...
   </div>
 
   <div class="card">
@@ -98,11 +99,14 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 
   <div class="card">
     <span class="section-title">上傳檔案</span>
-    <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+    <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()"
+      ondragover="event.preventDefault(); this.style.borderColor='var(--green)'"
+      ondragleave="this.style.borderColor=''"
+      ondrop="event.preventDefault(); handleFileUpload(event.dataTransfer.files[0])">
       <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
       <div style="font-weight: 500;">點擊或拖曳檔案</div>
       <div style="font-size: 12px; color: var(--text-3);">支援 MP4 / MKV / MOV</div>
-      <input type="file" id="fileInput" hidden onchange="handleFileUpload(this.files[0])">
+      <input type="file" id="fileInput" hidden accept="video/*" onchange="handleFileUpload(this.files[0])">
     </div>
   </div>
 
@@ -132,51 +136,82 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 腳本加載區 -->
-<script id="ffmpeg-script" src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.7/dist/umd/ffmpeg.umd.min.js"></script>
-<script id="util-script" src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.umd.min.js"></script>
+<!-- ✅ 修正：使用正確版本的 CDN，並確保全域變數名稱正確 -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.7/dist/umd/ffmpeg.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.umd.min.js"></script>
 
 <script>
 let ffmpeg = null;
 let subs = [];
-const CHUNK_DURATION = 600; 
+const CHUNK_DURATION = 600;
 
-// 檢查環境狀態
+// ✅ 修正：正確偵測 UMD 版本的全域變數
+// @ffmpeg/ffmpeg UMD 導出為 window.FFmpegWASM（注意大寫 WASM）
+// @ffmpeg/util UMD 導出為 window.FFmpegUtil
+function getFFmpegGlobals() {
+    // 嘗試各種可能的全域變數名稱
+    const ffmpegLib = window.FFmpegWASM || window.FFmpegWasm || window['@ffmpeg/ffmpeg'];
+    const utilLib = window.FFmpegUtil || window['@ffmpeg/util'];
+    return { ffmpegLib, utilLib };
+}
+
 function checkStatus() {
     const banner = document.getElementById('securityBanner');
-    // FFmpegWasm 是 UMD 版本導出的全域變數
-    if (typeof FFmpegWasm !== 'undefined') {
+    const { ffmpegLib, utilLib } = getFFmpegGlobals();
+    
+    console.log('偵測全域變數：');
+    console.log('FFmpegWASM:', typeof window.FFmpegWASM);
+    console.log('FFmpegWasm:', typeof window.FFmpegWasm);
+    console.log('FFmpegUtil:', typeof window.FFmpegUtil);
+    
+    if (ffmpegLib && ffmpegLib.FFmpeg && utilLib && utilLib.fetchFile) {
         banner.className = "info-banner";
-        banner.innerHTML = "✅ <b>組件已就緒</b>：環境已準備完成。";
+        banner.innerHTML = "✅ <b>組件已就緒</b>：環境已準備完成，可以上傳影片。";
         return true;
     } else {
+        const missing = [];
+        if (!ffmpegLib || !ffmpegLib.FFmpeg) missing.push('FFmpeg 核心');
+        if (!utilLib || !utilLib.fetchFile) missing.push('FFmpeg 工具');
+        
         banner.className = "info-banner error";
         banner.innerHTML = `
-            ❌ <b>載入失敗</b>：核心組件無法載入。<br>
-            <button class="btn btn-primary btn-sm" onclick="retryScripts()">嘗試修復載入</button>
+            ❌ <b>載入失敗</b>：${missing.join('、')} 無法載入。<br>
+            <small style="opacity:0.8">通常是網路問題或跨域限制，請嘗試：</small><br>
+            <button class="btn btn-primary btn-sm" onclick="retryLoad()" style="margin-top:6px">🔄 重新載入組件</button>
         `;
         return false;
     }
 }
 
-// 重新整理腳本
-function retryScripts() {
-    console.log("嘗試重新載入腳本...");
-    ['ffmpeg-script', 'util-script'].forEach(id => {
-        const old = document.getElementById(id);
-        if (old) {
-            const news = document.createElement('script');
-            news.id = id;
-            news.src = old.src + '?t=' + Date.now(); // 加 cache breaker
-            old.parentNode.replaceChild(news, old);
-        }
-    });
-    setTimeout(checkStatus, 2000);
+async function retryLoad() {
+    const banner = document.getElementById('securityBanner');
+    banner.className = "info-banner loading";
+    banner.innerHTML = "⏳ 重新載入中，請稍候...";
+    
+    // 移除舊腳本
+    document.querySelectorAll('script[data-ffmpeg]').forEach(s => s.remove());
+    
+    // 重新動態載入
+    await loadScript('https://unpkg.com/@ffmpeg/ffmpeg@0.12.7/dist/umd/ffmpeg.umd.min.js');
+    await loadScript('https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.umd.min.js');
+    
+    setTimeout(checkStatus, 1000);
 }
 
-// 初始化檢查
+function loadScript(src) {
+    return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src + '?t=' + Date.now();
+        s.setAttribute('data-ffmpeg', '1');
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+    });
+}
+
 window.addEventListener('load', () => {
-    setTimeout(checkStatus, 1500); // 給 CDN 一點時間
+    // 等待腳本完成載入
+    setTimeout(checkStatus, 2000);
 });
 
 function updateStatus(text, show = true, progress = null) {
@@ -191,27 +226,27 @@ function updateStatus(text, show = true, progress = null) {
 
 async function handleFileUpload(file) {
     if (!file) return;
-    if (!checkStatus()) return alert("核心組件尚未載入，請點擊左側『嘗試修復載入』");
+    if (!checkStatus()) return alert("核心組件尚未載入，請點擊左側『重新載入組件』後再試");
     
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請先輸入 OpenAI API Key");
 
+    const { ffmpegLib, utilLib } = getFFmpegGlobals();
     updateStatus("【1/5】正在啟動引擎...", true, 5);
 
     try {
         if (!ffmpeg) {
-            const { FFmpeg } = FFmpegWasm;
+            const { FFmpeg } = ffmpegLib;
             ffmpeg = new FFmpeg();
+            ffmpeg.on('log', ({ message }) => console.log('[FFmpeg]', message));
             
-            ffmpeg.on('log', ({ message }) => console.log(message));
-            
-            // 由於 Canvas 環境限制，我們使用 UMD 版本
+            updateStatus("【1/5】載入 FFmpeg 核心（首次需要較長時間）...", true, 8);
             await ffmpeg.load({
                 coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
             });
         }
 
-        const { fetchFile } = FFmpegUtil;
+        const { fetchFile } = utilLib;
         updateStatus("【2/5】載入影片中...", true, 15);
         await ffmpeg.writeFile('input_vid', await fetchFile(file));
 
@@ -249,6 +284,7 @@ async function handleFileUpload(file) {
                     fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
                 } catch (whisperErr) {
                     console.error("Whisper 辨識失敗：", whisperErr);
+                    alert("Whisper API 呼叫失敗：" + whisperErr.message);
                 }
                 
                 await ffmpeg.deleteFile(chunkName);
@@ -259,7 +295,7 @@ async function handleFileUpload(file) {
             if (chunkIndex > 100) break; 
         }
 
-        if (!fullSrtContent) throw new Error("未能生成內容。");
+        if (!fullSrtContent) throw new Error("未能產生字幕內容，請確認影片有聲音。");
 
         parseSrt(fullSrtContent);
         updateStatus("辨識完成！", true, 100);
@@ -269,6 +305,8 @@ async function handleFileUpload(file) {
         console.error("處理失敗：", err);
         alert("執行出錯：" + err.message);
         updateStatus("錯誤", false);
+        // 重置 ffmpeg 讓下次可重試
+        ffmpeg = null;
     }
 }
 
@@ -278,7 +316,7 @@ async function callWhisper(blob, key) {
     formData.append("model", "whisper-1");
     formData.append("response_format", "srt");
     const promptText = document.getElementById('prompt').value;
-    if(promptText) formData.append("prompt", promptText);
+    if (promptText) formData.append("prompt", promptText);
 
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
         method: "POST",
@@ -288,7 +326,7 @@ async function callWhisper(blob, key) {
 
     if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error?.message || "OpenAI API 請求失敗");
+        throw new Error(errJson.error?.message || `OpenAI API 請求失敗 (${res.status})`);
     }
     return await res.text();
 }
@@ -359,7 +397,7 @@ function deleteSub(index) {
 function addSub() {
     const last = subs[subs.length - 1];
     subs.push({ 
-        id: subs.length+1, 
+        id: subs.length + 1, 
         start: last ? last.end : '00:00:00,000', 
         end: last ? last.end : '00:00:05,000', 
         text: '' 
@@ -368,14 +406,15 @@ function addSub() {
 }
 
 function exportSRT() {
-    if (subs.length === 0) return;
+    if (subs.length === 0) return alert("尚無字幕可匯出");
     const content = subs.map(s => `${s.id}\n${s.start} --> ${s.end}\n${s.text}`).join('\n\n');
-    const blob = new Blob([content], { type: 'text/plain' });
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'transcription.srt';
     a.click();
+    URL.revokeObjectURL(url);
 }
 </script>
 
