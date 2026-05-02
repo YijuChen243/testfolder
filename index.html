@@ -122,10 +122,11 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 引入 FFmpeg -->
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+<!-- 更換為 jsdelivr CDN，確保穩定性 -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
 
 <script>
+// 使用 window 變數取得 FFmpeg (UMD 版本)
 const { FFmpeg } = window.FFmpegWASM;
 const ffmpeg = new FFmpeg();
 let subs = [];
@@ -162,13 +163,14 @@ async function handleFileUpload(file) {
         updateStatus("載入音訊引擎...", true, 5);
         if (!ffmpeg.loaded) {
             try {
+                // 使用 jsdelivr 的 CDN 連結，直接指定 JS 與 WASM 檔案
                 await ffmpeg.load({
-                    coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-                    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+                    coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+                    wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
                 });
             } catch (loadErr) {
                 console.error("FFmpeg Load Error:", loadErr);
-                throw new Error("FFmpeg 引擎載入失敗，這通常是由於瀏覽器安全限制。請確保使用 HTTP(S) 環境開啟。");
+                throw new Error("FFmpeg 引擎載入失敗，請確認網路連線或稍後再試。");
             }
         }
 
@@ -214,7 +216,7 @@ async function handleFileUpload(file) {
                 '-ss', currentStart.toString(), 
                 '-t', (CHUNK_DURATION + OVERLAP_DURATION).toString(), 
                 '-i', 'full_audio.mp3', 
-                '-acodec', 'copy', // 直接複製 mp3 串流，速度最快
+                '-acodec', 'copy', 
                 chunkName
             ]);
 
