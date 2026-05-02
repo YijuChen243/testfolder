@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>字幕工坊 — 影片轉字幕 (最終相容修正版)</title>
+<title>字幕工坊 — 影片轉字幕 (穩定版)</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -77,8 +77,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     <h1>字幕工坊</h1>
   </div>
 
-  <div class="info-banner">
-    ✅ 已切換至「相容模式」：無需特殊安全環境，修正了 fetchFile 引用錯誤。
+  <div class="info-banner" id="securityBanner">
+    ✅ <b>穩定模式已啟用</b>：無需特殊瀏覽器環境即可運行。
   </div>
 
   <div class="card">
@@ -129,26 +129,17 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 使用 FFmpeg 0.11 版本 -->
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+<!-- 改用新版 FFmpeg 0.12 -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.7/dist/umd/ffmpeg.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.umd.min.js"></script>
 
 <script>
-// 初始化 FFmpeg 實例
-let ffmpegInstance = null;
+const { FFmpeg } = FFmpegWasm;
+const { fetchFile } = FFmpegUtil;
 
-function getFFmpeg() {
-    if (ffmpegInstance) return ffmpegInstance;
-    // 確保從全域變數取得方法
-    if (!window.FFmpeg) {
-        throw new Error("FFmpeg 庫尚未載入，請檢查網路連線。");
-    }
-    const { createFFmpeg } = window.FFmpeg;
-    ffmpegInstance = createFFmpeg({ log: true });
-    return ffmpegInstance;
-}
-
+let ffmpeg = null;
 let subs = [];
-const CHUNK_DURATION = 600; // 每 10 分鐘切一段，平衡處理次數與檔案大小
+const CHUNK_DURATION = 600; 
 
 function updateStatus(text, show = true, progress = null) {
     const card = document.getElementById('statusCard');
@@ -165,23 +156,28 @@ async function handleFileUpload(file) {
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請先輸入 OpenAI API Key");
 
-    const instance = getFFmpeg();
+    updateStatus("【1/5】正在啟動引擎...", true, 5);
 
     try {
-        updateStatus("【1/5】正在啟動引擎...", true, 5);
-        
-        if (!instance.isLoaded()) {
-            await instance.load();
+        if (!ffmpeg) {
+            ffmpeg = new FFmpeg();
+            // 監聽進度
+            ffmpeg.on('progress', ({ progress }) => {
+                // FFmpeg 自帶進度是 0~1
+                console.log(`FFmpeg 進度: ${Math.round(progress * 100)}%`);
+            });
+            
+            await ffmpeg.load({
+                coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+            });
         }
 
         updateStatus("【2/5】載入影片中...", true, 15);
-        // 修正：從 window.FFmpeg 取得 fetchFile
-        const fetchFile = window.FFmpeg.fetchFile;
-        instance.FS('writeFile', 'input_vid', await fetchFile(file));
+        await ffmpeg.writeFile('input_vid', await fetchFile(file));
 
         updateStatus("【3/5】提取音軌 (相容模式)...", true, 30);
-        // 降低採樣率以減小體積並加快處理速度
-        await instance.run('-i', 'input_vid', '-vn', '-acodec', 'libmp3lame', '-b:a', '64k', '-ar', '16000', 'full_audio.mp3');
+        // 為了確保不依賴 SharedArrayBuffer 也能工作，我們使用基本指令
+        await ffmpeg.exec(['-i', 'input_vid', '-vn', '-acodec', 'libmp3lame', '-b:a', '64k', '-ar', '16000', '-y', 'full_audio.mp3']);
 
         let currentStart = 0;
         let chunkIndex = 1;
@@ -192,40 +188,39 @@ async function handleFileUpload(file) {
             updateStatus(`【4/5】切割段落 ${chunkIndex}...`, true, 40 + (chunkIndex * 2));
             
             const chunkName = `chunk_${chunkIndex}.mp3`;
-            try {
-                // 使用 -y 確保覆蓋檔案
-                await instance.run(
-                    '-ss', currentStart.toString(), 
-                    '-t', CHUNK_DURATION.toString(), 
-                    '-i', 'full_audio.mp3', 
-                    '-acodec', 'copy', 
-                    '-y',
-                    chunkName
-                );
+            await ffmpeg.exec([
+                '-ss', currentStart.toString(), 
+                '-t', CHUNK_DURATION.toString(), 
+                '-i', 'full_audio.mp3', 
+                '-acodec', 'copy', 
+                '-y',
+                chunkName
+            ]);
 
-                const data = instance.FS('readFile', chunkName);
-                if (data.length < 5000) { // 如果檔案小於 5KB，判定為段落末尾
-                    hasMore = false;
-                } else {
-                    const chunkBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
-                    updateStatus(`【5/5】AI 辨識中 (段落 ${chunkIndex})...`);
+            const data = await ffmpeg.readFile(chunkName);
+            if (data.length < 5000) { 
+                hasMore = false;
+            } else {
+                const chunkBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
+                updateStatus(`【5/5】AI 辨識中 (段落 ${chunkIndex})...`);
+                
+                try {
                     const srtPart = await callWhisper(chunkBlob, apiKey);
                     const offsetedSrt = offsetSrt(srtPart, currentStart);
                     fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
-                    
-                    instance.FS('unlink', chunkName);
-                    currentStart += CHUNK_DURATION;
-                    chunkIndex++;
+                } catch (whisperErr) {
+                    console.error("Whisper 辨識失敗：", whisperErr);
                 }
-            } catch (e) {
-                console.log("切片處理終止：", e);
-                hasMore = false;
+                
+                await ffmpeg.deleteFile(chunkName);
+                currentStart += CHUNK_DURATION;
+                chunkIndex++;
             }
             
             if (chunkIndex > 100) break; 
         }
 
-        if (!fullSrtContent) throw new Error("未能生成任何字幕內容。");
+        if (!fullSrtContent) throw new Error("未能生成內容。");
 
         parseSrt(fullSrtContent);
         updateStatus("辨識完成！", true, 100);
