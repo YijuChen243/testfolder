@@ -81,10 +81,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 
   <div id="coiError" class="error-banner">
     ⚠️ 偵測到安全環境未啟動 (SharedArrayBuffer 未定義)。<br>
-    請嘗試：<br>
-    1. 確保 <b>coi-serviceworker.js</b> 檔案存在。<br>
-    2. <b>手動重新整理頁面</b>一次。<br>
-    3. 確保使用 HTTPS 或 localhost 瀏覽。
+    這通常是因為 Service Worker 尚未生效。請<b>手動重新整理頁面</b>一次。
   </div>
 
   <div class="card">
@@ -135,8 +132,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- FFmpeg 主程式 -->
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
+<!-- 加入 crossorigin 屬性以配合隔離環境 -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js" crossorigin="anonymous"></script>
 
 <script>
 // 偵測是否已經跨域隔離
@@ -145,6 +142,7 @@ function checkIsolation() {
         document.getElementById('coiError').style.display = 'block';
         return false;
     }
+    document.getElementById('coiError').style.display = 'none';
     return true;
 }
 
@@ -155,16 +153,20 @@ let subs = [];
 const CHUNK_DURATION = 1200; 
 const OVERLAP_DURATION = 5;  
 
-// 強化的 Blob 轉換器，加入 retry 機制與更嚴格的錯誤捕捉
+// 針對跨域隔離環境優化的資源下載
 async function toBlobURL(url, mimeType) {
     try {
-        const resp = await fetch(url, { mode: 'cors' });
+        // 在隔離環境下，fetch 必須明確要求 cross-origin 模式
+        const resp = await fetch(url, { 
+            mode: 'cors',
+            credentials: 'omit'
+        });
         if (!resp.ok) throw new Error(`HTTP ${resp.status} - ${url}`);
         const blob = await resp.blob();
         return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     } catch (err) {
         console.error("下載依賴資源失敗:", url, err);
-        throw new Error(`無法載入核心資源，請檢查網路連線或 CORS 限制: ${url}`);
+        throw new Error(`無法載入 FFmpeg 核心組件。這通常是 CDN 跨域限制或網絡連線問題。\n錯誤詳情: ${err.message}`);
     }
 }
 
@@ -185,9 +187,8 @@ async function handleFileUpload(file) {
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請先輸入 OpenAI API Key");
 
-    // 檢查環境
     if (!checkIsolation()) {
-        alert("⚠️ 偵測到 SharedArrayBuffer 未啟用。這通常是因為安全隔離環境未準備就緒。請確保 coi-serviceworker.js 存在並重新整理頁面。");
+        alert("⚠️ 安全隔離環境 (SharedArrayBuffer) 未啟動，無法執行高效能處理。\n請重新整理頁面。");
         return;
     }
 
@@ -195,18 +196,19 @@ async function handleFileUpload(file) {
     let inputPath = '';
 
     try {
-        updateStatus("【1/5】正在載入 FFmpeg 核心...", true, 2);
+        updateStatus("【1/5】正在初始化 FFmpeg 引擎...", true, 2);
         
         if (!ffmpeg.loaded) {
+            // 使用特定的多線程版本路徑
             const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
             const ffmpegURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd';
             
-            // 透過 Blob URL 同源化外部資源
+            updateStatus("正在下載 WebAssembly 核心...", true, 5);
+            
             const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
             const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
             const workerURL = await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript');
 
-            updateStatus("【2/5】引擎初始化中...", true, 8);
             await ffmpeg.load({
                 coreURL: coreURL,
                 wasmURL: wasmURL,
@@ -214,17 +216,14 @@ async function handleFileUpload(file) {
             });
         }
 
-        updateStatus("【3/5】正在讀取影片檔案...", true, 12);
+        updateStatus("【2/5】正在讀取影片檔案...", true, 12);
         
         try {
-            // 優先嘗試 WORKERFS 以節省記憶體，這在大檔案特別重要
             await ffmpeg.createDir('/work');
             await ffmpeg.mount('WORKERFS', { files: [file] }, '/work');
             inputPath = `/work/${file.name}`;
             isMounted = true;
-            console.log("WORKERFS Mount Success");
         } catch (mountErr) {
-            console.warn("WORKERFS 失敗，改用 ArrayBuffer 載入");
             const fileData = await file.arrayBuffer();
             await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
             inputPath = 'input_vid';
@@ -242,7 +241,7 @@ async function handleFileUpload(file) {
 
         if (duration === 0) duration = 300; 
 
-        updateStatus("【4/5】提取並優化音軌...", true, 20);
+        updateStatus("【3/5】提取高品質音軌...", true, 20);
         await ffmpeg.exec([
             '-i', inputPath, 
             '-vn', 
@@ -259,7 +258,7 @@ async function handleFileUpload(file) {
 
         while (currentStart < duration) {
             const progress = 25 + Math.floor((chunkIndex / totalChunks) * 70);
-            updateStatus(`【5/5】辨識進度 ${chunkIndex}/${totalChunks}...`, true, progress);
+            updateStatus(`【4/5】處理段落 ${chunkIndex}/${totalChunks}...`, true, progress);
             
             const chunkName = `c_${chunkIndex}.mp3`;
             await ffmpeg.exec([
@@ -273,13 +272,13 @@ async function handleFileUpload(file) {
             const chunkData = await ffmpeg.readFile(chunkName);
             if (chunkData.length > 1000) {
                 const chunkBlob = new Blob([chunkData.buffer], { type: 'audio/mpeg' });
-                updateStatus(`段落 ${chunkIndex} AI 轉換中...`);
+                updateStatus(`【5/5】AI 語音辨識中 (${chunkIndex})...`);
                 try {
                     const srtPart = await callWhisper(chunkBlob, apiKey);
                     const offsetedSrt = offsetSrt(srtPart, currentStart);
                     fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
                 } catch (apiErr) {
-                    throw new Error(`OpenAI API 錯誤: ${apiErr.message}`);
+                    throw new Error(`OpenAI API 異常: ${apiErr.message}`);
                 }
             }
 
@@ -288,15 +287,15 @@ async function handleFileUpload(file) {
             chunkIndex++;
         }
 
-        if (!fullSrtContent) throw new Error("辨識結果為空。");
+        if (!fullSrtContent) throw new Error("未能生成任何字幕內容。");
 
         parseSrt(fullSrtContent);
         updateStatus("辨識完成！", true, 100);
         setTimeout(() => updateStatus("", false), 3000);
 
     } catch (err) {
-        console.error("系統執行錯誤:", err);
-        alert("操作失敗：\n" + (err.message || err.toString()));
+        console.error("Fatal Error:", err);
+        alert("處理失敗：\n" + err.message);
         updateStatus("處理失敗", false);
     } finally {
         if (isMounted) {
@@ -324,7 +323,7 @@ async function callWhisper(blob, key) {
 
     if (!res.ok) {
         const errorDetail = await res.json().catch(() => ({}));
-        throw new Error(errorDetail.error?.message || `HTTP 狀態碼 ${res.status}`);
+        throw new Error(errorDetail.error?.message || `API 響應錯誤 (${res.status})`);
     }
     return await res.text();
 }
