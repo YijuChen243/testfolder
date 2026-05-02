@@ -122,8 +122,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 改用 Unpkg CDN (相容性較佳) -->
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+<!-- 統一使用穩定的 jsdelivr CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
 
 <script>
 const { FFmpeg } = window.FFmpegWASM;
@@ -133,14 +133,13 @@ let subs = [];
 const CHUNK_DURATION = 1200; 
 const OVERLAP_DURATION = 5;  
 
-// 強化的資源下載函數
+// 優化資源下載：使用更安全的 Blob 處理方式
 async function toBlobURL(url, mimeType) {
     try {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`網路請求失敗 HTTP ${resp.status} - ${url}`);
-        const buf = await resp.arrayBuffer();
-        const blob = new Blob([buf], { type: mimeType });
-        return URL.createObjectURL(blob);
+        const blob = await resp.blob(); // 直接取用 blob，避免 arrayBuffer 的記憶體超載
+        return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     } catch (err) {
         console.error("下載依賴資源失敗:", url, err);
         throw new Error(`無法下載模組: ${url}\n原因: ${err.message}`);
@@ -173,24 +172,20 @@ async function handleFileUpload(file) {
         updateStatus("【階段 1】下載底層引擎...", true, 2);
         
         if (!ffmpeg.loaded) {
-            let coreURL, wasmURL, workerURL;
+            let workerURL;
             try {
-                // 使用 unpkg，並且加上防呆錯誤捕捉
-                const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-                const ffmpegURL = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd';
+                // 重大修復：只對 Worker 腳本 (100KB) 進行 Blob 化，避免 30MB 的 WASM 檔塞爆記憶體！
+                const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+                const ffmpegURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd';
                 
-                coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
-                wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+                // 僅轉換這一個檔案來繞過跨域限制
                 workerURL = await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript');
-            } catch (dlErr) {
-                throw new Error("【下載階段失敗】\n" + dlErr.message);
-            }
 
-            updateStatus("【階段 2】啟動引擎...", true, 8);
-            try {
+                updateStatus("【階段 2】啟動引擎...", true, 8);
                 await ffmpeg.load({
-                    coreURL: coreURL,
-                    wasmURL: wasmURL,
+                    // 核心檔直接透過網址讀取，不佔用本地 Blob 記憶體
+                    coreURL: `${baseURL}/ffmpeg-core.js`,
+                    wasmURL: `${baseURL}/ffmpeg-core.wasm`,
                     classWorkerURL: workerURL
                 });
             } catch (loadErr) {
@@ -300,7 +295,6 @@ async function handleFileUpload(file) {
 
     } catch (err) {
         console.error("【終極錯誤攔截】", err);
-        // 彈出詳細錯誤視窗
         alert("🚨 處理中斷！請截圖此畫面回報：\n\n" + (err.message || err.toString()));
         updateStatus("處理失敗", false);
     } finally {
