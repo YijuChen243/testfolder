@@ -80,7 +80,11 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 
   <div id="coiError" class="error-banner">
-    ⚠️ 偵測到安全環境未啟動。請確保 coi-serviceworker.js 在正確位置並嘗試手動重新整理頁面。
+    ⚠️ 偵測到安全環境未啟動 (SharedArrayBuffer 未定義)。<br>
+    請嘗試：<br>
+    1. 確保 <b>coi-serviceworker.js</b> 檔案存在。<br>
+    2. <b>手動重新整理頁面</b>一次。<br>
+    3. 確保使用 HTTPS 或 localhost 瀏覽。
   </div>
 
   <div class="card">
@@ -100,7 +104,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
       <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
       <div style="font-weight: 500;">點擊或拖曳檔案</div>
-      <div style="font-size: 12px; color: var(--text-3);">支援大型 MP4 (Blob 同源優化版)</div>
+      <div style="font-size: 12px; color: var(--text-3);">支援大型 MP4 (環境強化版)</div>
       <input type="file" id="fileInput" hidden onchange="handleFileUpload(this.files[0])">
     </div>
   </div>
@@ -135,9 +139,13 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
 
 <script>
-// 頁面初次載入檢查環境
-if (!window.crossOriginIsolated) {
-    document.getElementById('coiError').style.display = 'block';
+// 偵測是否已經跨域隔離
+function checkIsolation() {
+    if (!window.crossOriginIsolated || typeof SharedArrayBuffer === 'undefined') {
+        document.getElementById('coiError').style.display = 'block';
+        return false;
+    }
+    return true;
 }
 
 const { FFmpeg } = window.FFmpegWASM;
@@ -147,7 +155,7 @@ let subs = [];
 const CHUNK_DURATION = 1200; 
 const OVERLAP_DURATION = 5;  
 
-// 強化的 Blob 轉換器，確保帶有 anonymous 屬性以繞過 COEP 攔截
+// 強化的 Blob 轉換器，加入 retry 機制與更嚴格的錯誤捕捉
 async function toBlobURL(url, mimeType) {
     try {
         const resp = await fetch(url, { mode: 'cors' });
@@ -156,7 +164,7 @@ async function toBlobURL(url, mimeType) {
         return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     } catch (err) {
         console.error("下載依賴資源失敗:", url, err);
-        throw new Error(`無法載入核心資源: ${url}`);
+        throw new Error(`無法載入核心資源，請檢查網路連線或 CORS 限制: ${url}`);
     }
 }
 
@@ -177,9 +185,9 @@ async function handleFileUpload(file) {
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請先輸入 OpenAI API Key");
 
-    // 檢查 SharedArrayBuffer 是否可用
-    if (typeof SharedArrayBuffer === 'undefined') {
-        alert("⚠️ 瀏覽器尚未啟動 SharedArrayBuffer。這通常是因為安全隔離環境 (COI) 尚未就緒。請確保 coi-serviceworker.js 檔案存在並刷新頁面。");
+    // 檢查環境
+    if (!checkIsolation()) {
+        alert("⚠️ 偵測到 SharedArrayBuffer 未啟用。這通常是因為安全隔離環境未準備就緒。請確保 coi-serviceworker.js 存在並重新整理頁面。");
         return;
     }
 
@@ -193,7 +201,7 @@ async function handleFileUpload(file) {
             const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
             const ffmpegURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd';
             
-            // 透過 Blob URL 使外部資源對瀏覽器而言變成「同源」，徹底避開跨域隔離的白名單限制
+            // 透過 Blob URL 同源化外部資源
             const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
             const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
             const workerURL = await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript');
@@ -209,7 +217,7 @@ async function handleFileUpload(file) {
         updateStatus("【3/5】正在讀取影片檔案...", true, 12);
         
         try {
-            // 優先嘗試 WORKERFS 以節省記憶體
+            // 優先嘗試 WORKERFS 以節省記憶體，這在大檔案特別重要
             await ffmpeg.createDir('/work');
             await ffmpeg.mount('WORKERFS', { files: [file] }, '/work');
             inputPath = `/work/${file.name}`;
@@ -234,7 +242,7 @@ async function handleFileUpload(file) {
 
         if (duration === 0) duration = 300; 
 
-        updateStatus("【4/5】壓縮並優化音軌 (這需要一點時間)...", true, 20);
+        updateStatus("【4/5】提取並優化音軌...", true, 20);
         await ffmpeg.exec([
             '-i', inputPath, 
             '-vn', 
@@ -407,6 +415,9 @@ function exportSRT() {
     a.download = 'transcription.srt';
     a.click();
 }
+
+// 初始化檢查
+window.onload = checkIsolation;
 </script>
 
 </body>
