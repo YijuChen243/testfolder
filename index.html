@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>字幕工坊 — 影片轉字幕 (大型檔案支援版)</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --green: #0F6E56;
+  --green-light: #1D9E75;
+  --green-pale: #E1F5EE;
+  --green-mid: #5DCAA5;
+  --text: #1A1A1A;
+  --text-2: #555;
+  --text-3: #999;
+  --bg: #F8F9F7;
+  --bg-2: #FFFFFF;
+  --border: #E2E8E4;
+  --border-2: #C8D8D0;
+  --red-bg: #FEF2F2;
+  --red-border: #FECACA;
+  --red-text: #991B1B;
+  --blue: #185FA5;
+  --blue-pale: #E6F1FB;
+  --blue-border: #93C5FD;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; display: flex; height: 100vh; overflow: hidden; }
+
+/* 佈局設計 */
+.panel-left { width: 380px; background: var(--bg-2); border-right: 1px solid var(--border); padding: 24px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+.panel-right { flex: 1; display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+
+.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.brand-icon { width: 36px; height: 36px; background: var(--green); color: white; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+.brand h1 { font-size: 20px; font-weight: 700; }
+
+.card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.section-title { font-size: 13px; font-weight: 700; color: var(--text-3); text-transform: uppercase; margin-bottom: 12px; display: block; }
+
+.input-group { margin-bottom: 12px; }
+.input-group label { display: block; font-size: 13px; margin-bottom: 4px; color: var(--text-2); }
+.input-group input, .input-group select { width: 100%; padding: 8px 12px; border: 1px solid var(--border-2); border-radius: 6px; outline: none; font-family: inherit; }
+
+.dropzone { border: 2px dashed var(--border-2); border-radius: 12px; padding: 30px; text-align: center; cursor: pointer; transition: 0.2s; background: white; }
+.dropzone:hover { border-color: var(--green); background: var(--green-pale); }
+
+/* 字幕列表 */
+.editor-header { height: 60px; background: white; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; }
+.sub-list { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+.sub-item { background: white; border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; gap: 12px; position: relative; align-items: flex-start; }
+.sub-item textarea { flex: 1; border: none; background: var(--bg); padding: 8px; border-radius: 4px; resize: none; font-family: inherit; min-height: 70px; font-size: 14px; }
+.time-box { width: 110px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-2); flex-shrink: 0; }
+.del-btn { color: var(--text-3); background: none; border: none; cursor: pointer; padding: 4px; font-size: 18px; transition: 0.2s; }
+.del-btn:hover { color: var(--red-text); }
+
+.btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-weight: 500; font-family: inherit; }
+.btn-primary { background: var(--green); color: white; }
+.btn-secondary { background: var(--border); color: var(--text-2); }
+
+#statusCard { background: var(--blue-pale); border: 1px solid var(--blue-border); padding: 12px; border-radius: 8px; display: none; margin-top: 10px; }
+.spinner { width: 16px; height: 16px; border: 2px solid rgba(0,0,0,0.1); border-left-color: var(--green); border-radius: 50%; animation: spin 1s linear infinite; display: inline-block; margin-right: 8px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.progress-bar { height: 4px; width: 0%; background: var(--green); margin-top: 8px; transition: width 0.3s; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="panel-left">
+  <div class="brand">
+    <div class="brand-icon">S</div>
+    <h1>字幕工坊</h1>
+  </div>
+
+  <div class="card">
+    <span class="section-title">系統設定</span>
+    <div class="input-group">
+      <label>OpenAI API Key</label>
+      <input type="password" id="apiKey" placeholder="sk-...">
+    </div>
+    <div class="input-group">
+      <label>提示詞 (Prompt)</label>
+      <input type="text" id="prompt" placeholder="例如：繁體中文、專有名詞修正...">
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="section-title">上傳檔案</span>
+    <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+      <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
+      <div style="font-weight: 500;">點擊或拖曳檔案</div>
+      <div style="font-size: 12px; color: var(--text-3);">支援大型 MP4 (自動切割並轉碼)</div>
+      <input type="file" id="fileInput" hidden onchange="handleFileUpload(this.files[0])">
+    </div>
+  </div>
+
+  <div id="statusCard">
+    <div class="spinner"></div>
+    <span id="statusText" style="font-size: 13px; color: var(--blue);">準備中...</span>
+    <div id="pBar" class="progress-bar"></div>
+  </div>
+</div>
+
+<div class="panel-right">
+  <div class="editor-header">
+    <div style="font-size: 14px; color: var(--text-2);">
+      字幕段數：<span id="sCount" style="font-weight: 700;">0</span>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button class="btn btn-secondary" onclick="addSub()">+ 新增</button>
+      <button class="btn btn-primary" onclick="exportSRT()">匯出 SRT</button>
+    </div>
+  </div>
+  <div class="sub-list" id="subList">
+    <div style="text-align: center; color: var(--text-3); margin-top: 100px;">
+      等待檔案上傳並進行處理...
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+
+<script>
+const { FFmpeg } = window.FFmpegWASM;
+const ffmpeg = new FFmpeg();
+let subs = [];
+
+// 設定常數 (每段 20 分鐘，為了 API 穩定性，不建議超過此值)
+const CHUNK_DURATION = 1200; 
+const OVERLAP_DURATION = 5;  
+
+const fetchFile = async (file) => {
+    if (typeof file === 'string') return new Uint8Array(await (await fetch(file)).arrayBuffer());
+    return new Uint8Array(await file.arrayBuffer());
+};
+
+function updateStatus(text, show = true, progress = null) {
+    const card = document.getElementById('statusCard');
+    const msg = document.getElementById('statusText');
+    const pBar = document.getElementById('pBar');
+    if (!card) return;
+    card.style.display = show ? 'block' : 'none';
+    msg.textContent = text;
+    if (progress !== null) pBar.style.width = progress + '%';
+}
+
+async function handleFileUpload(file) {
+    if (!file) return;
+    const apiKey = document.getElementById('apiKey').value.trim();
+    if (!apiKey) return alert("請輸入 OpenAI API Key");
+
+    try {
+        updateStatus("載入音訊引擎...", true, 5);
+        if (!ffmpeg.loaded) {
+            await ffmpeg.load({
+                coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+                wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+            });
+        }
+
+        updateStatus("讀取影片資訊...", true, 10);
+        await ffmpeg.writeFile('input_vid', await fetchFile(file));
+
+        let duration = 0;
+        ffmpeg.on('log', ({ message }) => {
+            const match = message.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
+            if (match) {
+                duration = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]);
+            }
+        });
+        await ffmpeg.exec(['-i', 'input_vid']); 
+
+        if (duration === 0) {
+            console.warn("時長抓取失敗，預設為 10 分鐘，請檢查影片格式");
+            duration = 600; 
+        }
+
+        // 步驟 1: 提取完整音軌並預先轉碼為標準 MP3
+        updateStatus("提取並轉碼高品質音軌...", true, 20);
+        await ffmpeg.exec([
+            '-i', 'input_vid', 
+            '-vn', 
+            '-acodec', 'libmp3lame', 
+            '-b:a', '64k', 
+            '-ar', '16000', 
+            'full_audio.mp3'
+        ]);
+        
+        let currentStart = 0;
+        let index = 1;
+        let fullSrtContent = "";
+        const totalChunks = Math.ceil(duration / CHUNK_DURATION);
+
+        // 步驟 2: 分段處理
+        while (currentStart < duration) {
+            const p = Math.floor(20 + (index / totalChunks) * 75);
+            updateStatus(`正在處理第 ${index}/${totalChunks} 段音訊...`, true, p);
+            
+            const chunkName = `c_${index}.mp3`;
+            
+            // 重要：再次確保切割時強制指定 mp3 編碼格式，避免 API 報格式錯誤
+            await ffmpeg.exec([
+                '-ss', currentStart.toString(), 
+                '-t', (CHUNK_DURATION + OVERLAP_DURATION).toString(), 
+                '-i', 'full_audio.mp3', 
+                '-acodec', 'libmp3lame',
+                '-b:a', '64k',
+                chunkName
+            ]);
+
+            const chunkData = await ffmpeg.readFile(chunkName);
+            console.log(`[DEBUG] 段落 ${index} 實際位元組:`, chunkData.length);
+
+            if (chunkData.length < 5000) {
+                console.warn(`段落 ${index} 太小，可能無聲或損毀，略過`);
+            } else {
+                const chunkBlob = new Blob([chunkData.buffer], { type: 'audio/mpeg' });
+                
+                updateStatus(`AI 辨識中 (段落 ${index})...`);
+                try {
+                    const srtPart = await callWhisper(chunkBlob, apiKey);
+                    const offsetedSrt = offsetSrt(srtPart, currentStart);
+                    fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
+                } catch (apiErr) {
+                    console.error(`段落 ${index} 辨識失敗:`, apiErr);
+                }
+            }
+
+            currentStart += CHUNK_DURATION;
+            index++;
+            if (index > 100) break; // 防止異常長時間導致瀏覽器崩潰
+        }
+
+        if (!fullSrtContent) throw new Error("API 辨識失敗，未獲得任何字幕內容。");
+
+        parseSrt(fullSrtContent);
+        updateStatus("字幕生成成功！", true, 100);
+        setTimeout(() => updateStatus("", false), 3000);
+
+    } catch (err) {
+        console.error("處理出錯:", err);
+        alert("處理過程中發生錯誤：" + err.message);
+        updateStatus("處理終止", false);
+    }
+}
+
+async function callWhisper(blob, key) {
+    const formData = new FormData();
+    // 關鍵修復：檔名必須明確為 .mp3，這能協助 OpenAI 識別格式
+    formData.append("file", blob, "chunk.mp3");
+    formData.append("model", "whisper-1");
+    formData.append("response_format", "srt");
+    const prompt = document.getElementById('prompt').value;
+    if(prompt) formData.append("prompt", prompt);
+
+    const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${key}` },
+        body: formData
+    });
+
+    if (!res.ok) {
+        const errorDetail = await res.json().catch(() => ({}));
+        throw new Error(errorDetail.error?.message || `API 響應錯誤: ${res.status}`);
+    }
+    return await res.text();
+}
+
+function offsetSrt(srtText, offsetSeconds) {
+    if (offsetSeconds === 0) return srtText;
+    const timeRegex = /(\d{2}:\d{2}:\d{2},\d{3})/g;
+    return srtText.replace(timeRegex, (match) => {
+        let [hms, ms] = match.split(',');
+        let [h, m, s] = hms.split(':').map(Number);
+        let totalMs = (h * 3600 + m * 60 + s) * 1000 + Number(ms) + (offsetSeconds * 1000);
+        
+        if (totalMs < 0) totalMs = 0;
+        let nh = Math.floor(totalMs / 3600000).toString().padStart(2, '0');
+        let nm = Math.floor((totalMs % 3600000) / 60000).toString().padStart(2, '0');
+        let ns = Math.floor((totalMs % 60000) / 1000).toString().padStart(2, '0');
+        let nms = (totalMs % 1000).toString().padStart(3, '0');
+        return `${nh}:${nm}:${ns},${nms}`;
+    });
+}
+
+function parseSrt(text) {
+    const blocks = text.trim().split(/\n\s*\n/);
+    let tempSubs = [];
+    blocks.forEach((block) => {
+        const lines = block.split('\n');
+        if (lines.length < 3) return;
+        const timeLine = lines[1];
+        if (!timeLine || !timeLine.includes(' --> ')) return;
+        const [start, end] = timeLine.split(' --> ');
+        tempSubs.push({ 
+            id: tempSubs.length + 1, 
+            start: start.trim(), 
+            end: end.trim(), 
+            text: lines.slice(2).join('\n') 
+        });
+    });
+    subs = tempSubs;
+    render();
+}
+
+function render() {
+    const list = document.getElementById('subList');
+    document.getElementById('sCount').textContent = subs.length;
+    
+    if (subs.length === 0) {
+        list.innerHTML = `<div style="text-align: center; color: var(--text-3); margin-top: 100px;">等待處理中...</div>`;
+        return;
+    }
+
+    list.innerHTML = subs.map((s, i) => `
+        <div class="sub-item">
+            <div class="time-box">
+                <div style="font-weight:bold; color:var(--green)">#${s.id}</div>
+                <div>${s.start}</div>
+                <div style="margin: 2px 0; color: var(--text-3)">至</div>
+                <div>${s.end}</div>
+            </div>
+            <textarea onchange="subs[${i}].text = this.value">${s.text}</textarea>
+            <button class="del-btn" title="刪除此段" onclick="deleteSub(${i})">✕</button>
+        </div>
+    `).join('');
+}
+
+function deleteSub(index) {
+    subs.splice(index, 1);
+    // 重新排序 ID
+    subs.forEach((s, idx) => s.id = idx + 1);
+    render();
+}
+
+function addSub() {
+    const last = subs[subs.length - 1];
+    subs.push({
+        id: subs.length + 1,
+        start: last ? last.end : '00:00:00,000',
+        end: last ? last.end : '00:00:05,000',
+        text: ''
+    });
+    render();
+    // 自動滾動到底部
+    const list = document.getElementById('subList');
+    list.scrollTop = list.scrollHeight;
+}
+
+function exportSRT() {
+    if (subs.length === 0) return alert("沒有內容可匯出");
+    const content = subs.map(s => `${s.id}\n${s.start} --> ${s.end}\n${s.text}`).join('\n\n');
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'output_subtitle.srt';
+    a.click();
+}
+</script>
+
+</body>
+</html>
