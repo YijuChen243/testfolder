@@ -93,7 +93,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
       <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
       <div style="font-weight: 500;">點擊或拖曳檔案</div>
-      <div style="font-size: 12px; color: var(--text-3);">支援大型 MP4 (自動切割並轉碼)</div>
+      <div style="font-size: 12px; color: var(--text-3);">支援超大 MP4 (零記憶體串流處理)</div>
       <input type="file" id="fileInput" hidden onchange="handleFileUpload(this.files[0])">
     </div>
   </div>
@@ -122,7 +122,6 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 引入未壓縮的 FFmpeg 確保 Chunk 命名正確 -->
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
 
 <script>
@@ -133,7 +132,6 @@ let subs = [];
 const CHUNK_DURATION = 1200; 
 const OVERLAP_DURATION = 5;  
 
-// 將跨網域的檔案轉化為本地 Blob URL，這是解決 GitHub Pages 阻擋 Web Worker 的核心魔法！
 async function toBlobURL(url, mimeType) {
     try {
         const resp = await fetch(url);
@@ -166,14 +164,15 @@ async function handleFileUpload(file) {
         return alert("錯誤：無法在 'file://' 環境下運行。\n請上傳至 GitHub Pages，或使用 VS Code Live Server 開啟。");
     }
 
+    let inputPath = 'input_vid';
+    let isMounted = false;
+
     try {
-        updateStatus("正在下載並建構 FFmpeg 引擎 (首次需數十秒)...", true, 2);
+        updateStatus("正在下載並建構 FFmpeg 引擎...", true, 2);
         if (!ffmpeg.loaded) {
             try {
-                // 1. 動態下載並轉為本地 Blob，徹底繞過瀏覽器的跨域 Worker 阻擋
                 const coreURL = await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js', 'text/javascript');
                 const wasmURL = await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm', 'application/wasm');
-                // 2. FFmpeg 專用的 Worker 腳本
                 const workerURL = await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js', 'text/javascript');
 
                 updateStatus("載入引擎...", true, 8);
@@ -188,25 +187,47 @@ async function handleFileUpload(file) {
             }
         }
 
-        updateStatus("讀取影片至記憶體中...", true, 10);
+        updateStatus("掛載影片 (零記憶體串流模式)...", true, 10);
         
-        // 記憶體防崩潰機制
-        let fileData;
+        // ---------------------------------------------------------
+        // 🚀 核心防崩潰機制：嘗試使用 WORKERFS 直接讀取硬碟，繞過 RAM
+        // ---------------------------------------------------------
         try {
-            fileData = await file.arrayBuffer();
-            await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
-        } catch (memErr) {
-            throw new Error("影片檔案過大，導致瀏覽器記憶體不足。請嘗試上傳較小的影片檔 (建議 500MB 以下)。");
+            const safeFile = new File([file], "input_vid.mp4", { type: file.type || "video/mp4" });
+            await ffmpeg.createDir('/work');
+            
+            // 掛載虛擬檔案系統
+            try {
+                await ffmpeg.mount('WORKERFS', { files: [safeFile] }, '/work');
+            } catch (e1) {
+                await ffmpeg.mount('WORKERFS', { blobs: [{ name: 'input_vid.mp4', data: safeFile }] }, '/work');
+            }
+            inputPath = '/work/input_vid.mp4';
+            isMounted = true;
+            console.log("成功啟用 WORKERFS 掛載模式！");
+        } catch (mountErr) {
+            console.warn("WORKERFS 掛載失敗，退回常規記憶體模式:", mountErr);
+            try {
+                // 如果瀏覽器真的不支援，只好退回舊方法
+                const fileData = await file.arrayBuffer();
+                await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
+                inputPath = 'input_vid';
+            } catch (memErr) {
+                throw new Error("影片檔案過大，導致瀏覽器記憶體不足。此裝置無法處理過大的檔案。");
+            }
         }
 
         let duration = 0;
-        ffmpeg.on('log', ({ message }) => {
+        const logCallback = ({ message }) => {
             const match = message.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
             if (match) {
                 duration = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]);
             }
-        });
-        await ffmpeg.exec(['-i', 'input_vid']); 
+        };
+        
+        ffmpeg.on('log', logCallback);
+        await ffmpeg.exec(['-i', inputPath]); 
+        ffmpeg.off('log', logCallback); // 獲取完時長後關閉監聽
 
         if (duration === 0) {
             console.warn("時長抓取失敗，預設為 10 分鐘");
@@ -214,8 +235,9 @@ async function handleFileUpload(file) {
         }
 
         updateStatus("提取並轉碼高品質音軌...", true, 20);
+        // 從 inputPath (掛載的虛擬路徑) 提取音訊，產生的 mp3 極小，可安全存入 MEMFS
         await ffmpeg.exec([
-            '-i', 'input_vid', 
+            '-i', inputPath, 
             '-vn', 
             '-acodec', 'libmp3lame', 
             '-b:a', '64k', 
@@ -243,8 +265,7 @@ async function handleFileUpload(file) {
             ]);
 
             const chunkData = await ffmpeg.readFile(chunkName);
-            console.log(`[DEBUG] 段落 ${index} 位元組:`, chunkData.length);
-
+            
             if (chunkData.length > 5000) {
                 const chunkBlob = new Blob([chunkData.buffer], { type: 'audio/mpeg' });
                 updateStatus(`AI 辨識中 (段落 ${index})...`);
@@ -262,7 +283,7 @@ async function handleFileUpload(file) {
             if (index > 100) break;
         }
 
-        if (!fullSrtContent) throw new Error("未獲得任何字幕內容，可能是 API 金鑰額額不足或網路問題。");
+        if (!fullSrtContent) throw new Error("未獲得任何字幕內容，可能是 API 金鑰額度不足。");
 
         parseSrt(fullSrtContent);
         updateStatus("字幕生成成功！", true, 100);
@@ -272,6 +293,16 @@ async function handleFileUpload(file) {
         console.error("處理出錯:", err);
         alert("錯誤：" + err.message);
         updateStatus("處理終止", false);
+    } finally {
+        // 清理虛擬掛載，釋放資源
+        if (isMounted) {
+            try {
+                await ffmpeg.unmount('/work');
+                await ffmpeg.deleteDir('/work');
+            } catch (cleanupErr) {
+                console.warn("清理資源時發生小錯誤", cleanupErr);
+            }
+        }
     }
 }
 
