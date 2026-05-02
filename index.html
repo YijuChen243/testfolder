@@ -122,17 +122,30 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 更換為 jsdelivr CDN，確保穩定性 -->
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
+<!-- 引入未壓縮的 FFmpeg 確保 Chunk 命名正確 -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
 
 <script>
-// 使用 window 變數取得 FFmpeg (UMD 版本)
 const { FFmpeg } = window.FFmpegWASM;
 const ffmpeg = new FFmpeg();
 let subs = [];
 
 const CHUNK_DURATION = 1200; 
 const OVERLAP_DURATION = 5;  
+
+// 將跨網域的檔案轉化為本地 Blob URL，這是解決 GitHub Pages 阻擋 Web Worker 的核心魔法！
+async function toBlobURL(url, mimeType) {
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buf = await resp.arrayBuffer();
+        const blob = new Blob([buf], { type: mimeType });
+        return URL.createObjectURL(blob);
+    } catch (err) {
+        console.error("下載依賴資源失敗:", url, err);
+        throw new Error("無法下載核心模組，請檢查網路連線。");
+    }
+}
 
 function updateStatus(text, show = true, progress = null) {
     const card = document.getElementById('statusCard');
@@ -149,31 +162,42 @@ async function handleFileUpload(file) {
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請輸入 OpenAI API Key");
 
-    // 安全性檢查：如果是本地檔案打開，預先提醒
     if (window.location.protocol === 'file:') {
-        return alert("錯誤：FFmpeg 無法在 'file://' 協議下運行。\n請使用 VS Code Live Server 開啟網頁，或將其部署至 GitHub Pages。");
+        return alert("錯誤：無法在 'file://' 環境下運行。\n請上傳至 GitHub Pages，或使用 VS Code Live Server 開啟。");
     }
 
     try {
-        updateStatus("載入音訊引擎...", true, 5);
+        updateStatus("正在下載並建構 FFmpeg 引擎 (首次需數十秒)...", true, 2);
         if (!ffmpeg.loaded) {
             try {
-                // 使用 jsdelivr 的 CDN 連結，直接指定 JS 與 WASM 檔案
+                // 1. 動態下載並轉為本地 Blob，徹底繞過瀏覽器的跨域 Worker 阻擋
+                const coreURL = await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js', 'text/javascript');
+                const wasmURL = await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm', 'application/wasm');
+                // 2. FFmpeg 專用的 Worker 腳本
+                const workerURL = await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js', 'text/javascript');
+
+                updateStatus("載入引擎...", true, 8);
                 await ffmpeg.load({
-                    coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-                    wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+                    coreURL: coreURL,
+                    wasmURL: wasmURL,
+                    classWorkerURL: workerURL
                 });
             } catch (loadErr) {
                 console.error("FFmpeg Load Error:", loadErr);
-                throw new Error("FFmpeg 引擎載入失敗，請確認網路連線或稍後再試。");
+                throw new Error("FFmpeg 引擎啟動失敗，請重新整理網頁後再試。");
             }
         }
 
-        updateStatus("讀取影片資訊...", true, 10);
+        updateStatus("讀取影片至記憶體中...", true, 10);
         
-        // 關鍵修復：改用瀏覽器原生的 arrayBuffer 讀取檔案，徹底解決 fetchFile is not defined 的問題
-        const fileData = await file.arrayBuffer();
-        await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
+        // 記憶體防崩潰機制
+        let fileData;
+        try {
+            fileData = await file.arrayBuffer();
+            await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
+        } catch (memErr) {
+            throw new Error("影片檔案過大，導致瀏覽器記憶體不足。請嘗試上傳較小的影片檔 (建議 500MB 以下)。");
+        }
 
         let duration = 0;
         ffmpeg.on('log', ({ message }) => {
@@ -238,7 +262,7 @@ async function handleFileUpload(file) {
             if (index > 100) break;
         }
 
-        if (!fullSrtContent) throw new Error("未獲得任何字幕內容。");
+        if (!fullSrtContent) throw new Error("未獲得任何字幕內容，可能是 API 金鑰額額不足或網路問題。");
 
         parseSrt(fullSrtContent);
         updateStatus("字幕生成成功！", true, 100);
