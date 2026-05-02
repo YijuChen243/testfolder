@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>字幕工坊 — 影片轉字幕 (相容模式修正版)</title>
+<title>字幕工坊 — 影片轉字幕 (最終相容修正版)</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -78,7 +78,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 
   <div class="info-banner">
-    ✅ 已切換至「相容模式」：無需特殊安全環境，修正了核心引擎啟動問題。
+    ✅ 已切換至「相容模式」：無需特殊安全環境，修正了 fetchFile 引用錯誤。
   </div>
 
   <div class="card">
@@ -133,19 +133,22 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 
 <script>
-// 修正 0.11 版本的初始化引用方式
-let ffmpeg = null;
+// 初始化 FFmpeg 實例
+let ffmpegInstance = null;
 
 function getFFmpeg() {
-    if (ffmpeg) return ffmpeg;
-    // 0.11 版本中 createFFmpeg 是在 FFmpeg 全域變數下
+    if (ffmpegInstance) return ffmpegInstance;
+    // 確保從全域變數取得方法
+    if (!window.FFmpeg) {
+        throw new Error("FFmpeg 庫尚未載入，請檢查網路連線。");
+    }
     const { createFFmpeg } = window.FFmpeg;
-    ffmpeg = createFFmpeg({ log: true });
-    return ffmpeg;
+    ffmpegInstance = createFFmpeg({ log: true });
+    return ffmpegInstance;
 }
 
 let subs = [];
-const CHUNK_DURATION = 600; // 縮短每段時長以提高單線程處理的成功率
+const CHUNK_DURATION = 600; // 每 10 分鐘切一段，平衡處理次數與檔案大小
 
 function updateStatus(text, show = true, progress = null) {
     const card = document.getElementById('statusCard');
@@ -172,11 +175,12 @@ async function handleFileUpload(file) {
         }
 
         updateStatus("【2/5】載入影片中...", true, 15);
-        const { fetchFile } = window.FFmpeg;
+        // 修正：從 window.FFmpeg 取得 fetchFile
+        const fetchFile = window.FFmpeg.fetchFile;
         instance.FS('writeFile', 'input_vid', await fetchFile(file));
 
-        updateStatus("【3/5】提取音軌...", true, 30);
-        // 單線程模式下，轉檔會耗費一點時間
+        updateStatus("【3/5】提取音軌 (相容模式)...", true, 30);
+        // 降低採樣率以減小體積並加快處理速度
         await instance.run('-i', 'input_vid', '-vn', '-acodec', 'libmp3lame', '-b:a', '64k', '-ar', '16000', 'full_audio.mp3');
 
         let currentStart = 0;
@@ -187,23 +191,24 @@ async function handleFileUpload(file) {
         while (hasMore) {
             updateStatus(`【4/5】切割段落 ${chunkIndex}...`, true, 40 + (chunkIndex * 2));
             
-            const chunkName = `c_${chunkIndex}.mp3`;
+            const chunkName = `chunk_${chunkIndex}.mp3`;
             try {
-                // 使用 -y 強制覆蓋，避免對話框阻塞
+                // 使用 -y 確保覆蓋檔案
                 await instance.run(
                     '-ss', currentStart.toString(), 
                     '-t', CHUNK_DURATION.toString(), 
                     '-i', 'full_audio.mp3', 
                     '-acodec', 'copy', 
+                    '-y',
                     chunkName
                 );
 
                 const data = instance.FS('readFile', chunkName);
-                if (data.length < 2000) { // 檔案太小代表沒內容了
+                if (data.length < 5000) { // 如果檔案小於 5KB，判定為段落末尾
                     hasMore = false;
                 } else {
                     const chunkBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
-                    updateStatus(`【5/5】AI 辨識中 (${chunkIndex})...`);
+                    updateStatus(`【5/5】AI 辨識中 (段落 ${chunkIndex})...`);
                     const srtPart = await callWhisper(chunkBlob, apiKey);
                     const offsetedSrt = offsetSrt(srtPart, currentStart);
                     fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
@@ -213,29 +218,29 @@ async function handleFileUpload(file) {
                     chunkIndex++;
                 }
             } catch (e) {
-                console.log("Segment end reached or error:", e);
+                console.log("切片處理終止：", e);
                 hasMore = false;
             }
             
-            if (chunkIndex > 100) break; // 安全上限
+            if (chunkIndex > 100) break; 
         }
 
-        if (!fullSrtContent) throw new Error("未能生成字幕，請確認音軌是否提取成功。");
+        if (!fullSrtContent) throw new Error("未能生成任何字幕內容。");
 
         parseSrt(fullSrtContent);
         updateStatus("辨識完成！", true, 100);
         setTimeout(() => updateStatus("", false), 3000);
 
     } catch (err) {
-        console.error(err);
-        alert("執行錯誤：" + err.message);
+        console.error("處理失敗：", err);
+        alert("執行出錯：" + err.message);
         updateStatus("錯誤", false);
     }
 }
 
 async function callWhisper(blob, key) {
     const formData = new FormData();
-    formData.append("file", blob, "chunk.mp3");
+    formData.append("file", blob, "audio.mp3");
     formData.append("model", "whisper-1");
     formData.append("response_format", "srt");
     const promptText = document.getElementById('prompt').value;
@@ -293,6 +298,10 @@ function parseSrt(text) {
 function render() {
     const list = document.getElementById('subList');
     document.getElementById('sCount').textContent = subs.length;
+    if (subs.length === 0) {
+        list.innerHTML = `<div style="text-align: center; color: var(--text-3); margin-top: 100px;">等待處理中...</div>`;
+        return;
+    }
     list.innerHTML = subs.map((s, i) => `
         <div class="sub-item">
             <div class="time-box">
@@ -302,7 +311,7 @@ function render() {
                 <div>${s.end}</div>
             </div>
             <textarea onchange="subs[${i}].text = this.value">${s.text}</textarea>
-            <button class="del-btn" onclick="deleteSub(${i})">✕</button>
+            <button class="del-btn" title="刪除" onclick="deleteSub(${i})">✕</button>
         </div>
     `).join('');
 }
@@ -314,7 +323,13 @@ function deleteSub(index) {
 }
 
 function addSub() {
-    subs.push({ id: subs.length+1, start: '00:00:00,000', end: '00:00:05,000', text: '' });
+    const last = subs[subs.length - 1];
+    subs.push({ 
+        id: subs.length+1, 
+        start: last ? last.end : '00:00:00,000', 
+        end: last ? last.end : '00:00:05,000', 
+        text: '' 
+    });
     render();
 }
 
