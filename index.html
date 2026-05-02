@@ -78,7 +78,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 
   <div class="info-banner" id="securityBanner">
-    ✅ <b>穩定模式已啟用</b>：無需特殊瀏覽器環境即可運行。
+    ✅ <b>引擎載入中...</b> 請稍候
   </div>
 
   <div class="card">
@@ -123,7 +123,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     </div>
   </div>
   <div class="sub-list" id="subList">
-    <div style="text-align: center; color: var(--text-3); margin-top: 100px;">
+    <div id="emptyTip" style="text-align: center; color: var(--text-3); margin-top: 100px;">
       等待檔案上傳並進行處理...
     </div>
   </div>
@@ -134,12 +134,19 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.umd.min.js"></script>
 
 <script>
-const { FFmpeg } = FFmpegWasm;
-const { fetchFile } = FFmpegUtil;
-
+// 確保從全域物件獲取，避免 ReferenceError
 let ffmpeg = null;
 let subs = [];
 const CHUNK_DURATION = 600; 
+
+// 檢查程式庫是否載入
+window.onload = () => {
+    if (typeof FFmpegWasm === 'undefined') {
+        document.getElementById('securityBanner').innerHTML = "❌ <b>載入失敗</b>：請重新整理頁面。";
+    } else {
+        document.getElementById('securityBanner').innerHTML = "✅ <b>穩定模式已啟用</b>：環境已就緒。";
+    }
+};
 
 function updateStatus(text, show = true, progress = null) {
     const card = document.getElementById('statusCard');
@@ -160,23 +167,26 @@ async function handleFileUpload(file) {
 
     try {
         if (!ffmpeg) {
+            // 雙重檢查載入
+            if (typeof FFmpegWasm === 'undefined') {
+                throw new Error("FFmpeg 程式庫尚未載入完成，請稍候再試。");
+            }
+            
+            const { FFmpeg } = FFmpegWasm;
             ffmpeg = new FFmpeg();
-            // 監聽進度
-            ffmpeg.on('progress', ({ progress }) => {
-                // FFmpeg 自帶進度是 0~1
-                console.log(`FFmpeg 進度: ${Math.round(progress * 100)}%`);
-            });
+            
+            ffmpeg.on('log', ({ message }) => console.log(message));
             
             await ffmpeg.load({
                 coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
             });
         }
 
+        const { fetchFile } = FFmpegUtil;
         updateStatus("【2/5】載入影片中...", true, 15);
         await ffmpeg.writeFile('input_vid', await fetchFile(file));
 
         updateStatus("【3/5】提取音軌 (相容模式)...", true, 30);
-        // 為了確保不依賴 SharedArrayBuffer 也能工作，我們使用基本指令
         await ffmpeg.exec(['-i', 'input_vid', '-vn', '-acodec', 'libmp3lame', '-b:a', '64k', '-ar', '16000', '-y', 'full_audio.mp3']);
 
         let currentStart = 0;
@@ -294,7 +304,7 @@ function render() {
     const list = document.getElementById('subList');
     document.getElementById('sCount').textContent = subs.length;
     if (subs.length === 0) {
-        list.innerHTML = `<div style="text-align: center; color: var(--text-3); margin-top: 100px;">等待處理中...</div>`;
+        list.innerHTML = `<div id="emptyTip" style="text-align: center; color: var(--text-3); margin-top: 100px;">等待檔案上傳中...</div>`;
         return;
     }
     list.innerHTML = subs.map((s, i) => `
