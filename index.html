@@ -67,6 +67,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 
 .progress-bar-container { height: 6px; width: 100%; background: rgba(0,0,0,0.05); margin-top: 8px; border-radius: 3px; overflow: hidden; }
 .progress-bar { height: 100%; width: 0%; background: var(--green); transition: width 0.4s ease; }
+
+.error-banner { background: var(--red-bg); color: var(--red-text); border: 1px solid var(--red-border); padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; display: none; }
 </style>
 </head>
 <body>
@@ -75,6 +77,10 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   <div class="brand">
     <div class="brand-icon">S</div>
     <h1>字幕工坊</h1>
+  </div>
+
+  <div id="coiError" class="error-banner">
+    ⚠️ 偵測到環境未隔離。正在嘗試啟動加速引擎，若頁面未自動重新整理，請手動重新整理一次。
   </div>
 
   <div class="card">
@@ -94,7 +100,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
       <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
       <div style="font-weight: 500;">點擊或拖曳檔案</div>
-      <div style="font-size: 12px; color: var(--text-3);">支援大型 MP4 (全面 Blob 化修復)</div>
+      <div style="font-size: 12px; color: var(--text-3);">支援大型 MP4 (隔離環境優化版)</div>
       <input type="file" id="fileInput" hidden onchange="handleFileUpload(this.files[0])">
     </div>
   </div>
@@ -125,21 +131,26 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 必須放在腳本最前面，以啟用 Cross-Origin Isolation -->
+<!-- 必須置於所有腳本最前方 -->
 <script src="coi-serviceworker.js"></script>
 
 <!-- FFmpeg 主程式 -->
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
 
 <script>
+// 檢查是否處於 Cross-Origin Isolated 環境
+if (!window.crossOriginIsolated && window.location.protocol !== 'file:') {
+    document.getElementById('coiError').style.display = 'block';
+    console.warn("環境尚未隔離，SharedArrayBuffer 將無法使用。");
+}
+
 const { FFmpeg } = window.FFmpegWASM;
 const ffmpeg = new FFmpeg();
 let subs = [];
 
-const CHUNK_DURATION = 1200; // 每段處理 20 分鐘
-const OVERLAP_DURATION = 5;  // 重疊 5 秒以防斷句
+const CHUNK_DURATION = 1200; 
+const OVERLAP_DURATION = 5;  
 
-// 強化的資源載入器：將所有資源轉換為 BlobURL 以解決跨域隔離載入問題
 async function toBlobURL(url, mimeType) {
     try {
         const resp = await fetch(url);
@@ -148,7 +159,7 @@ async function toBlobURL(url, mimeType) {
         return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     } catch (err) {
         console.error("下載依賴資源失敗:", url, err);
-        throw new Error(`資源載入失敗: ${url}\n請檢查網路連線或 CORS 設定。`);
+        throw new Error(`資源載入失敗: ${url}`);
     }
 }
 
@@ -169,22 +180,28 @@ async function handleFileUpload(file) {
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請先輸入 OpenAI API Key");
 
+    // 終極防呆：如果環境沒隔離，提示用戶
+    if (!window.crossOriginIsolated && window.location.protocol !== 'file:') {
+        alert("⚠️ 系統偵測到安全環境尚未準備完成。\n請嘗試：\n1. 重新整理頁面\n2. 確保 coi-serviceworker.js 檔案存在於伺服器上");
+        return;
+    }
+
     let isMounted = false;
     let inputPath = '';
 
     try {
-        updateStatus("【1/5】下載編碼器核心資源...", true, 2);
+        updateStatus("【1/5】下載編碼器核心...", true, 2);
         
         if (!ffmpeg.loaded) {
             const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
             const ffmpegURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd';
             
-            // 關鍵修復：在開啟 COI 的嚴格環境下，必須將所有核心腳本轉為同源 Blob。
+            // 將所有核心腳本轉為同源 Blob 以解決 COEP 隔離下的載入限制
             const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
             const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
             const workerURL = await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript');
 
-            updateStatus("【2/5】啟動 WebAssembly 引擎...", true, 8);
+            updateStatus("【2/5】引擎初始化...", true, 8);
             await ffmpeg.load({
                 coreURL: coreURL,
                 wasmURL: wasmURL,
@@ -195,20 +212,17 @@ async function handleFileUpload(file) {
         updateStatus("【3/5】掛載影片中...", true, 12);
         
         try {
-            // 嘗試使用 WORKERFS 模式（最省記憶體，適合大型影片）
             await ffmpeg.createDir('/work');
             await ffmpeg.mount('WORKERFS', { files: [file] }, '/work');
             inputPath = `/work/${file.name}`;
             isMounted = true;
-            console.log("WORKERFS 掛載成功");
         } catch (mountErr) {
-            console.warn("WORKERFS 掛載失敗，回退至記憶體模式", mountErr);
+            console.warn("WORKERFS 失敗，改用記憶體載入");
             const fileData = await file.arrayBuffer();
             await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
             inputPath = 'input_vid';
         }
 
-        // 偵測影片時長
         let duration = 0;
         const durationLogger = ({ message }) => {
             const match = message.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
@@ -230,7 +244,6 @@ async function handleFileUpload(file) {
             'full_audio.mp3'
         ]);
 
-        // 開始分段辨識
         let currentStart = 0;
         let chunkIndex = 1;
         let fullSrtContent = "";
@@ -258,26 +271,24 @@ async function handleFileUpload(file) {
                     const offsetedSrt = offsetSrt(srtPart, currentStart);
                     fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
                 } catch (apiErr) {
-                    throw new Error(`OpenAI API 報錯 (段落 ${chunkIndex}): ${apiErr.message}`);
+                    throw new Error(`OpenAI API 錯誤: ${apiErr.message}`);
                 }
             }
 
-            // 及時清理暫存檔
             await ffmpeg.deleteFile(chunkName);
-
             currentStart += CHUNK_DURATION;
             chunkIndex++;
         }
 
-        if (!fullSrtContent) throw new Error("未能成功生成字幕內容。");
+        if (!fullSrtContent) throw new Error("未能生成字幕內容。");
 
         parseSrt(fullSrtContent);
         updateStatus("處理完成！", true, 100);
         setTimeout(() => updateStatus("", false), 3000);
 
     } catch (err) {
-        console.error("處理流程中斷:", err);
-        alert("發生錯誤：\n" + (err.message || err.toString()));
+        console.error("系統故障:", err);
+        alert("🚨 發生錯誤：\n" + (err.message || err.toString()));
         updateStatus("處理失敗", false);
     } finally {
         if (isMounted) {
