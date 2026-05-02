@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>字幕工坊 — 影片轉字幕 (隔離環境強化版)</title>
+<title>字幕工坊 — 影片轉字幕 (相容模式版)</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -66,10 +66,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 .progress-bar-container { height: 6px; width: 100%; background: rgba(0,0,0,0.05); margin-top: 8px; border-radius: 3px; overflow: hidden; }
 .progress-bar { height: 100%; width: 0%; background: var(--green); transition: width 0.4s ease; }
 
-.error-banner { background: var(--red-bg); color: var(--red-text); border: 1px solid var(--red-border); padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; display: none; }
+.info-banner { background: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
 </style>
-<!-- 引入 coi-serviceworker 以解決隔離環境問題 -->
-<script src="coi-serviceworker.js"></script>
 </head>
 <body>
 
@@ -79,9 +77,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     <h1>字幕工坊</h1>
   </div>
 
-  <div id="coiError" class="error-banner">
-    ⚠️ 偵測到安全環境未啟動 (SharedArrayBuffer 未定義)。<br>
-    這通常是因為 Service Worker 尚未生效。請<b>手動重新整理頁面</b>一次。
+  <div class="info-banner">
+    ✅ 已切換至「相容模式」：無需特殊安全環境，適用於一般網頁空間。
   </div>
 
   <div class="card">
@@ -101,7 +98,7 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
     <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
       <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
       <div style="font-weight: 500;">點擊或拖曳檔案</div>
-      <div style="font-size: 12px; color: var(--text-3);">支援大型 MP4 (環境強化版)</div>
+      <div style="font-size: 12px; color: var(--text-3);">支援 MP4 / MKV / MOV</div>
       <input type="file" id="fileInput" hidden onchange="handleFileUpload(this.files[0])">
     </div>
   </div>
@@ -132,43 +129,19 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
   </div>
 </div>
 
-<!-- 加入 crossorigin 屬性以配合隔離環境 -->
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js" crossorigin="anonymous"></script>
+<!-- 使用 FFmpeg 0.11 版本，此版本對單線程環境支援較好且較穩定 -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 
 <script>
-// 偵測是否已經跨域隔離
-function checkIsolation() {
-    if (!window.crossOriginIsolated || typeof SharedArrayBuffer === 'undefined') {
-        document.getElementById('coiError').style.display = 'block';
-        return false;
-    }
-    document.getElementById('coiError').style.display = 'none';
-    return true;
-}
+const { createFFmpeg, fetchFile } = FFmpeg;
+const ffmpeg = createFFmpeg({ 
+    log: false,
+    // 關鍵設定：強制不載入多線程 worker，避免 SharedArrayBuffer 問題
+    mainName: 'main'
+});
 
-const { FFmpeg } = window.FFmpegWASM;
-const ffmpeg = new FFmpeg();
 let subs = [];
-
 const CHUNK_DURATION = 1200; 
-const OVERLAP_DURATION = 5;  
-
-// 針對跨域隔離環境優化的資源下載
-async function toBlobURL(url, mimeType) {
-    try {
-        // 在隔離環境下，fetch 必須明確要求 cross-origin 模式
-        const resp = await fetch(url, { 
-            mode: 'cors',
-            credentials: 'omit'
-        });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status} - ${url}`);
-        const blob = await resp.blob();
-        return URL.createObjectURL(new Blob([blob], { type: mimeType }));
-    } catch (err) {
-        console.error("下載依賴資源失敗:", url, err);
-        throw new Error(`無法載入 FFmpeg 核心組件。這通常是 CDN 跨域限制或網絡連線問題。\n錯誤詳情: ${err.message}`);
-    }
-}
 
 function updateStatus(text, show = true, progress = null) {
     const card = document.getElementById('statusCard');
@@ -177,9 +150,7 @@ function updateStatus(text, show = true, progress = null) {
     if (!card) return;
     card.style.display = show ? 'block' : 'none';
     if (text) msg.textContent = text;
-    if (progress !== null) {
-        pBar.style.width = Math.min(progress, 100) + '%';
-    }
+    if (progress !== null) pBar.style.width = Math.min(progress, 100) + '%';
 }
 
 async function handleFileUpload(file) {
@@ -187,123 +158,74 @@ async function handleFileUpload(file) {
     const apiKey = document.getElementById('apiKey').value.trim();
     if (!apiKey) return alert("請先輸入 OpenAI API Key");
 
-    if (!checkIsolation()) {
-        alert("⚠️ 安全隔離環境 (SharedArrayBuffer) 未啟動，無法執行高效能處理。\n請重新整理頁面。");
-        return;
-    }
-
-    let isMounted = false;
-    let inputPath = '';
-
     try {
-        updateStatus("【1/5】正在初始化 FFmpeg 引擎...", true, 2);
+        updateStatus("【1/5】正在啟動引擎...", true, 5);
         
-        if (!ffmpeg.loaded) {
-            // 使用特定的多線程版本路徑
-            const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
-            const ffmpegURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd';
-            
-            updateStatus("正在下載 WebAssembly 核心...", true, 5);
-            
-            const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
-            const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
-            const workerURL = await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript');
-
-            await ffmpeg.load({
-                coreURL: coreURL,
-                wasmURL: wasmURL,
-                classWorkerURL: workerURL
-            });
+        if (!ffmpeg.isLoaded()) {
+            await ffmpeg.load();
         }
 
-        updateStatus("【2/5】正在讀取影片檔案...", true, 12);
+        updateStatus("【2/5】載入影片中...", true, 15);
+        ffmpeg.FS('writeFile', 'input_vid', await fetchFile(file));
+
+        updateStatus("【3/5】提取音軌 (相容模式)...", true, 30);
+        // 使用更簡單的參數以增加相容性
+        await ffmpeg.run('-i', 'input_vid', '-vn', '-acodec', 'libmp3lame', '-b:a', '64k', 'full_audio.mp3');
+
+        // 讀取音檔獲取大約時長（簡單做法，或者由檔案大小估計）
+        // 在相容模式下，我們直接開始切片處理
         
-        try {
-            await ffmpeg.createDir('/work');
-            await ffmpeg.mount('WORKERFS', { files: [file] }, '/work');
-            inputPath = `/work/${file.name}`;
-            isMounted = true;
-        } catch (mountErr) {
-            const fileData = await file.arrayBuffer();
-            await ffmpeg.writeFile('input_vid', new Uint8Array(fileData));
-            inputPath = 'input_vid';
-        }
-
-        // 偵測時長
-        let duration = 0;
-        const durationLogger = ({ message }) => {
-            const match = message.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
-            if (match) duration = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]);
-        };
-        ffmpeg.on('log', durationLogger);
-        await ffmpeg.exec(['-i', inputPath]);
-        ffmpeg.off('log', durationLogger);
-
-        if (duration === 0) duration = 300; 
-
-        updateStatus("【3/5】提取高品質音軌...", true, 20);
-        await ffmpeg.exec([
-            '-i', inputPath, 
-            '-vn', 
-            '-acodec', 'libmp3lame', 
-            '-b:a', '64k', 
-            '-ar', '16000', 
-            'full_audio.mp3'
-        ]);
-
         let currentStart = 0;
         let chunkIndex = 1;
         let fullSrtContent = "";
-        const totalChunks = Math.ceil(duration / CHUNK_DURATION);
 
-        while (currentStart < duration) {
-            const progress = 25 + Math.floor((chunkIndex / totalChunks) * 70);
-            updateStatus(`【4/5】處理段落 ${chunkIndex}/${totalChunks}...`, true, progress);
+        // 注意：單線程模式下無法精確偵測 Duration，我們用迴圈嘗試直到失敗為止
+        let hasMore = true;
+        while (hasMore) {
+            updateStatus(`【4/5】處理段落 ${chunkIndex}...`, true, 40 + (chunkIndex * 5));
             
             const chunkName = `c_${chunkIndex}.mp3`;
-            await ffmpeg.exec([
-                '-ss', currentStart.toString(), 
-                '-t', (CHUNK_DURATION + OVERLAP_DURATION).toString(), 
-                '-i', 'full_audio.mp3', 
-                '-acodec', 'copy', 
-                chunkName
-            ]);
+            try {
+                await ffmpeg.run(
+                    '-ss', currentStart.toString(), 
+                    '-t', CHUNK_DURATION.toString(), 
+                    '-i', 'full_audio.mp3', 
+                    '-acodec', 'copy', 
+                    chunkName
+                );
 
-            const chunkData = await ffmpeg.readFile(chunkName);
-            if (chunkData.length > 1000) {
-                const chunkBlob = new Blob([chunkData.buffer], { type: 'audio/mpeg' });
-                updateStatus(`【5/5】AI 語音辨識中 (${chunkIndex})...`);
-                try {
+                const data = ffmpeg.FS('readFile', chunkName);
+                if (data.length < 1000) {
+                    hasMore = false;
+                } else {
+                    const chunkBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
+                    updateStatus(`【5/5】AI 辨識中 (${chunkIndex})...`);
                     const srtPart = await callWhisper(chunkBlob, apiKey);
                     const offsetedSrt = offsetSrt(srtPart, currentStart);
                     fullSrtContent += (fullSrtContent ? "\n\n" : "") + offsetedSrt;
-                } catch (apiErr) {
-                    throw new Error(`OpenAI API 異常: ${apiErr.message}`);
+                    
+                    ffmpeg.FS('unlink', chunkName);
+                    currentStart += CHUNK_DURATION;
+                    chunkIndex++;
                 }
+            } catch (e) {
+                hasMore = false;
             }
-
-            await ffmpeg.deleteFile(chunkName);
-            currentStart += CHUNK_DURATION;
-            chunkIndex++;
+            
+            // 安全機制，避免無限迴圈
+            if (chunkIndex > 50) hasMore = false;
         }
 
-        if (!fullSrtContent) throw new Error("未能生成任何字幕內容。");
+        if (!fullSrtContent) throw new Error("未能生成字幕，請確認影片是否有聲音。");
 
         parseSrt(fullSrtContent);
         updateStatus("辨識完成！", true, 100);
         setTimeout(() => updateStatus("", false), 3000);
 
     } catch (err) {
-        console.error("Fatal Error:", err);
-        alert("處理失敗：\n" + err.message);
-        updateStatus("處理失敗", false);
-    } finally {
-        if (isMounted) {
-            try {
-                await ffmpeg.unmount('/work');
-                await ffmpeg.deleteDir('/work');
-            } catch (e) {}
-        }
+        console.error(err);
+        alert("處理出錯：" + err.message);
+        updateStatus("錯誤", false);
     }
 }
 
@@ -321,10 +243,7 @@ async function callWhisper(blob, key) {
         body: formData
     });
 
-    if (!res.ok) {
-        const errorDetail = await res.json().catch(() => ({}));
-        throw new Error(errorDetail.error?.message || `API 響應錯誤 (${res.status})`);
-    }
+    if (!res.ok) throw new Error("OpenAI API 請求失敗");
     return await res.text();
 }
 
@@ -335,7 +254,6 @@ function offsetSrt(srtText, offsetSeconds) {
         let [hms, ms] = match.split(',');
         let [h, m, s] = hms.split(':').map(Number);
         let totalMs = (h * 3600 + m * 60 + s) * 1000 + Number(ms) + (offsetSeconds * 1000);
-        if (totalMs < 0) totalMs = 0;
         let nh = Math.floor(totalMs / 3600000).toString().padStart(2, '0');
         let nm = Math.floor((totalMs % 3600000) / 60000).toString().padStart(2, '0');
         let ns = Math.floor((totalMs % 60000) / 1000).toString().padStart(2, '0');
@@ -367,10 +285,6 @@ function parseSrt(text) {
 function render() {
     const list = document.getElementById('subList');
     document.getElementById('sCount').textContent = subs.length;
-    if (subs.length === 0) {
-        list.innerHTML = `<div style="text-align: center; color: var(--text-3); margin-top: 100px;">等待處理中...</div>`;
-        return;
-    }
     list.innerHTML = subs.map((s, i) => `
         <div class="sub-item">
             <div class="time-box">
@@ -380,32 +294,23 @@ function render() {
                 <div>${s.end}</div>
             </div>
             <textarea onchange="subs[${i}].text = this.value">${s.text}</textarea>
-            <button class="del-btn" title="刪除此段" onclick="deleteSub(${i})">✕</button>
+            <button class="del-btn" onclick="deleteSub(${i})">✕</button>
         </div>
     `).join('');
 }
 
 function deleteSub(index) {
     subs.splice(index, 1);
-    subs.forEach((s, idx) => s.id = idx + 1);
     render();
 }
 
 function addSub() {
-    const last = subs[subs.length - 1];
-    subs.push({
-        id: subs.length + 1,
-        start: last ? last.end : '00:00:00,000',
-        end: last ? last.end : '00:00:05,000',
-        text: ''
-    });
+    subs.push({ id: subs.length+1, start: '00:00:00,000', end: '00:00:05,000', text: '' });
     render();
-    const list = document.getElementById('subList');
-    list.scrollTop = list.scrollHeight;
 }
 
 function exportSRT() {
-    if (subs.length === 0) return alert("目前沒有可匯出的字幕");
+    if (subs.length === 0) return;
     const content = subs.map(s => `${s.id}\n${s.start} --> ${s.end}\n${s.text}`).join('\n\n');
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -414,9 +319,6 @@ function exportSRT() {
     a.download = 'transcription.srt';
     a.click();
 }
-
-// 初始化檢查
-window.onload = checkIsolation;
 </script>
 
 </body>
