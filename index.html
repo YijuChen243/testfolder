@@ -3,439 +3,490 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>📈 股票智能看盤</title>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap');
-*{margin:0;padding:0;box-sizing:border-box}
-:root{
-  --bg:#0a0e1a;--panel:#0f1628;--border:#1e2d4a;
-  --accent:#00d4ff;--green:#00ff88;--red:#ff4d6d;
-  --yellow:#ffd60a;--orange:#ff8c42;--purple:#b57aff;
-  --text:#c8d8f0;--muted:#4a6080;--card:#111827;
-}
-body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:20px 24px;
-  background-image:radial-gradient(ellipse at 20% 0%,rgba(0,212,255,.07) 0%,transparent 55%),radial-gradient(ellipse at 80% 100%,rgba(0,255,136,.05) 0%,transparent 55%)}
+<title>50嵐 線上訂飲料</title>
 
-/* ── Header ── */
-.header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border)}
-h1{font-size:26px;font-weight:700;color:var(--accent);letter-spacing:2px}
-.subtitle{font-size:13px;color:var(--muted);margin-top:4px}
+<!-- ✅ 請至 Firebase Console 建立專案後，將下方設定替換為您自己的 -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, push, onValue, remove, get } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
-/* ── Key Button (top-right) ── */
-.key-btn{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border);
-  border-radius:22px;padding:8px 16px;cursor:pointer;font-size:13px;color:var(--accent);font-weight:700;
-  transition:all .2s;white-space:nowrap;flex-shrink:0}
-.key-btn:hover{border-color:var(--accent);background:#152035}
-.key-dot{width:9px;height:9px;border-radius:50%;background:var(--red);transition:background .3s;flex-shrink:0}
-.key-dot.set{background:var(--green)}
+  // 🔧 替換成您的 Firebase 設定
+   const firebaseConfig = {
+    apiKey: "AIzaSyCri00tBFokcFKULLEX1twz4VeZFpMFRqc",
+    authDomain: "drink50-aec15.firebaseapp.com",
+    projectId: "drink50-aec15",
+    storageBucket: "drink50-aec15.firebasestorage.app",
+    messagingSenderId: "1001845497104",
+    appId: "1:1001845497104:web:f00abe0a36bd189642d995"
+  };
 
-/* ── Key Modal ── */
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;align-items:center;justify-content:center}
-.modal-overlay.open{display:flex}
-.modal{background:#0d1829;border:1px solid var(--accent);border-radius:16px;padding:28px;width:420px;max-width:90vw;box-shadow:0 16px 48px rgba(0,0,0,.7)}
-.modal h2{font-size:16px;color:var(--accent);margin-bottom:16px}
-.modal-desc{font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:16px}
-.modal-desc a{color:var(--accent);text-decoration:none}
-.modal-input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
-  padding:11px 14px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:14px;outline:none;margin-bottom:14px}
-.modal-input:focus{border-color:var(--accent)}
-.modal-input::placeholder{color:var(--muted)}
-.modal-btns{display:flex;gap:10px}
-.modal-save{flex:1;padding:10px;background:var(--accent);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer}
-.modal-save:hover{background:#33ddff}
-.modal-cancel{padding:10px 16px;background:var(--border);color:var(--text);border:none;border-radius:8px;font-size:14px;cursor:pointer}
-.modal-cancel:hover{background:#2a3f60}
+  const app = initializeApp(firebaseConfig);
+  const db  = getDatabase(app);
+  const ordersRef = ref(db, 'orders');
 
-/* ── Input zone ── */
-.input-zone{background:var(--panel);border:1px solid var(--border);border-radius:12px;
-  padding:16px 20px;margin-bottom:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
-.input-group{display:flex;flex-direction:column;gap:6px;flex:1;min-width:180px}
-.input-group label{font-size:13px;color:var(--muted)}
-.ticker-input{background:var(--bg);border:1px solid var(--border);border-radius:8px;
-  padding:11px 14px;color:var(--text);font-family:'JetBrains Mono',monospace;
-  font-size:16px;width:100%;outline:none;transition:border-color .2s}
-.ticker-input:focus{border-color:var(--accent)}
-.ticker-input::placeholder{color:var(--muted)}
-.btn{padding:11px 20px;border-radius:8px;border:none;cursor:pointer;
-  font-family:'Noto Sans TC',sans-serif;font-size:14px;font-weight:600;transition:all .2s;white-space:nowrap}
-.btn-add{background:var(--accent);color:#000}
-.btn-add:hover{background:#33ddff}
-.btn-run{background:linear-gradient(135deg,#00d4ff,#0055aa);color:#fff;font-weight:700}
-.btn-run:hover{opacity:.88}
-.btn-run:disabled,.btn-add:disabled{opacity:.4;cursor:not-allowed}
+  // ── 菜單資料 ──────────────────────────────────────────
+  const TEA_RGHB = ["紅茶","綠茶","青茶","烏龍"];
+  const MENU = [
+    {cat:"找好茶", items:[
+      {name:"茉莉綠茶",      M:35, L:40},
+      {name:"阿薩姆紅茶",    M:35, L:40},
+      {name:"四季春青茶",    M:35, L:40},
+      {name:"黃金烏龍",      M:35, L:40},
+      {name:"檸檬綠",        M:50, L:60},
+      {name:"梅の綠",        M:50, L:60},
+      {name:"桔子綠",        M:50, L:60},
+      {name:"8冰綠",         M:50, L:60},
+      {name:"養樂多綠",      M:50, L:60},
+      {name:"旺來紅/柚子紅", M:50, L:60, tea:["旺來紅","柚子紅"], teaLabel:"口味"},
+      {name:"鮮柚綠",        M:60, L:75},
+    ]},
+    {cat:"找口感", items:[
+      {name:"四季春+珍波椰", M:40, L:50},
+      {name:"波霸",          M:40, L:50, tea:TEA_RGHB, teaLabel:"茶底"},
+      {name:"波霸奶茶",      M:50, L:60},
+      {name:"波霸奶綠",      M:50, L:60},
+      {name:"波霸烏龍奶茶",  M:50, L:60},
+      {name:"珍珠",          M:40, L:50, tea:TEA_RGHB, teaLabel:"茶底"},
+      {name:"珍珠奶茶",      M:50, L:60},
+      {name:"珍珠奶綠",      M:50, L:60},
+      {name:"椰果奶茶",      M:50, L:60},
+      {name:"布丁奶茶/奶綠", M:60, L:75, tea:["奶茶","奶綠"], teaLabel:"選擇"},
+      {name:"布丁",          M:50, L:60, tea:TEA_RGHB, teaLabel:"茶底"},
+    ]},
+    {cat:"找奶茶", items:[
+      {name:"奶茶",          M:50, L:60},
+      {name:"奶綠",          M:50, L:60},
+      {name:"紅茶瑪奇朵",    M:50, L:60},
+      {name:"烏龍瑪奇朵",    M:50, L:60},
+      {name:"四季奶青",      M:50, L:60},
+      {name:"黃金烏龍奶茶",  M:50, L:60},
+      {name:"阿華田",        M:55, L:65},
+    ]},
+    {cat:"找新鮮", items:[
+      {name:"檸檬汁",        M:55, L:65},
+      {name:"金桔檸檬",      M:55, L:65},
+      {name:"檸檬梅汁",      M:60, L:75},
+      {name:"檸檬養樂多",    M:65, L:80},
+      {name:"8冰茶",         M:50, L:60},
+      {name:"柚子茶",        M:50, L:60},
+      {name:"鮮柚汁",        M:60, L:75},
+      {name:"葡萄柚多多",    M:65, L:80},
+    ]},
+    {cat:"紅茶拿鐵", items:[
+      {name:"紅茶拿鐵",      M:60, L:75},
+      {name:"綠茶拿鐵",      M:60, L:75},
+      {name:"黃金烏龍拿鐵",  M:60, L:75},
+      {name:"阿華田拿鐵",    M:65, L:80},
+    ]},
+    {cat:"找冰淇淋", items:[
+      {name:"冰淇淋紅茶",    M:50, L:60},
+      {name:"芒果青",        M:50, L:60},
+      // 荔枝烏龍 已停售
+    ]},
+  ];
 
-/* ── Weight panel ── */
-.weight-panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;
-  padding:14px 20px;margin-bottom:14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
-.weight-title{font-size:13px;color:var(--accent);font-weight:700;white-space:nowrap}
-.weight-sliders{display:flex;gap:16px;flex-wrap:wrap;flex:1}
-.weight-item{display:flex;flex-direction:column;gap:5px;min-width:120px;flex:1}
-.weight-label{font-size:12px;color:var(--muted);display:flex;justify-content:space-between}
-.weight-label span{color:var(--text);font-family:'JetBrains Mono',monospace;font-weight:700}
-input[type=range]{-webkit-appearance:none;width:100%;height:4px;background:var(--border);border-radius:2px;outline:none}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;cursor:pointer;transition:transform .15s}
-.rt::-webkit-slider-thumb{background:var(--accent)}
-.rf::-webkit-slider-thumb{background:var(--purple)}
-.rm::-webkit-slider-thumb{background:var(--orange)}
-input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.3)}
-.weight-right{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
-.wsum{font-size:12px}.wsum.ok{color:var(--green)}.wsum.warn{color:var(--yellow)}
-.btn-recalc{padding:7px 14px;background:var(--border);color:var(--text);border:none;border-radius:7px;font-size:13px;cursor:pointer}
-.btn-recalc:hover{background:var(--accent);color:#000}
+  const SUGARS = ["無糖","微糖","半糖","少糖","正常糖"];
+  const ICES   = ["去冰","少冰","正常冰","熱"];
+  const TEA_COLOR = {
+    "紅茶":"tea-red","旺來紅":"tea-red","柚子紅":"tea-red",
+    "綠茶":"tea-green","奶綠":"tea-green",
+    "青茶":"tea-blue",
+    "烏龍":"tea-oolong","奶茶":"tea-oolong"
+  };
 
-/* ── Chips ── */
-.chip-zone{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;min-height:8px}
-.chip{background:var(--panel);border:1px solid var(--border);border-radius:20px;
-  padding:5px 13px;font-size:13px;font-family:'JetBrains Mono',monospace;
-  display:flex;align-items:center;gap:6px;color:var(--accent)}
-.chip-x{cursor:pointer;color:var(--muted);font-size:15px;line-height:1}
-.chip-x:hover{color:var(--red)}
+  let sel=null, selTea=null, selSugar="半糖", selIce="少冰", selSize="M";
+  let cart=[];
+  let allOrders={};   // key = Firebase push key, value = order object
 
-/* ── Cards ── */
-.cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}
-.stock-card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;animation:fadeIn .4s ease}
-@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-.stock-card.buy{border-color:rgba(0,255,136,.45)}
-.stock-card.sell{border-color:rgba(255,77,109,.45)}
-.stock-card.hold{border-color:rgba(255,214,10,.35)}
-.card-header{padding:14px 16px;display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--border)}
-.ticker-name{font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#fff}
-.company-name{font-size:13px;color:var(--muted);margin-top:2px}
-.price-block{text-align:right}
-.price{font-family:'JetBrains Mono',monospace;font-size:24px;font-weight:700}
-.chg{font-size:14px;margin-top:2px;font-family:'JetBrains Mono',monospace}
-.up{color:var(--green)}.down{color:var(--red)}
-.card-body{padding:14px 16px}
-.sig-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;font-size:15px;font-weight:700;letter-spacing:1px;margin-bottom:12px}
-.sig-buy{background:rgba(0,255,136,.12);color:var(--green);border:1px solid rgba(0,255,136,.3)}
-.sig-sell{background:rgba(255,77,109,.12);color:var(--red);border:1px solid rgba(255,77,109,.3)}
-.sig-hold{background:rgba(255,214,10,.1);color:var(--yellow);border:1px solid rgba(255,214,10,.3)}
-.metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
-.metric{background:var(--panel);border-radius:8px;padding:9px 11px}
-.metric-label{font-size:12px;color:var(--muted);margin-bottom:3px}
-.metric-value{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:var(--text)}
-.trend-section{background:var(--panel);border-radius:10px;padding:11px 13px;margin-bottom:12px}
-.trend-title{font-size:12px;color:var(--accent);letter-spacing:1px;margin-bottom:8px;font-weight:700}
-.trend-rows{display:flex;flex-direction:column;gap:7px}
-.trend-row{display:flex;align-items:center;gap:8px}
-.trend-period{font-size:13px;color:var(--muted);width:32px;flex-shrink:0}
-.trend-bg{flex:1;height:6px;background:var(--border);border-radius:3px;position:relative;overflow:hidden}
-.trend-fill{height:6px;border-radius:3px;position:absolute;top:0;left:0;transition:width .6s ease}
-.trend-arr{font-size:14px;width:18px;text-align:center;flex-shrink:0}
-.trend-desc{font-size:12px;width:68px;flex-shrink:0;text-align:right}
-.mom-row{display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
-.mom-label{font-size:12px;color:var(--muted);white-space:nowrap}
-.mom-dots{display:flex;gap:3px;flex:1}
-.m-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0}
-.m-dot.mu{background:rgba(0,255,136,.5);border:1px solid var(--green)}
-.m-dot.n{background:var(--border)}
-.m-dot.md{background:rgba(255,77,109,.5);border:1px solid var(--red)}
-.mom-text{font-size:12px;font-weight:700;white-space:nowrap}
-.score-block{background:var(--panel);border-radius:8px;padding:10px 12px;margin-bottom:12px}
-.score-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
-.score-lbl{font-size:12px;color:var(--muted)}
-.score-num{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700}
-.bar-bg{background:var(--border);border-radius:3px;height:5px}
-.bar-fg{height:5px;border-radius:3px;transition:width .5s ease}
-.sub-bars{display:flex;gap:5px;margin-top:6px}
-.sub-item{display:flex;flex-direction:column;gap:3px}
-.sub-lbl{font-size:11px}
-.ai-reason{background:var(--panel);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:10px 13px;font-size:14px;line-height:1.8;color:var(--text)}
-.loading-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:36px;text-align:center;color:var(--muted);font-size:14px}
-.spinner{width:28px;height:28px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.empty-state{text-align:center;padding:50px 20px;color:var(--muted);grid-column:1/-1}
-.empty-icon{font-size:44px;margin-bottom:14px}
-.empty-title{font-size:20px;color:var(--text);margin-bottom:8px}
-.error-card{background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.3);border-radius:12px;padding:18px;color:var(--red);font-size:14px}
-.info-note{font-size:12px;color:var(--muted);margin-top:20px;text-align:center;line-height:1.7}
-</style>
-</head>
-<body>
+  // ── 即時監聽 Firebase ─────────────────────────────────
+  onValue(ordersRef, snap => {
+    allOrders = snap.val() || {};
+    if(document.getElementById('stats').classList.contains('active')) renderStats();
+  });
 
-<!-- Header -->
-<div class="header">
-  <div>
-    <h1>📈 股票智能看盤</h1>
-    <div class="subtitle">AI 驅動 · 漲跌趨勢分析 · 動能加權調整</div>
-  </div>
-  <button class="key-btn" id="keyBtn" onclick="openModal()">
-    <span class="key-dot" id="keyDot"></span> API Key
-  </button>
-</div>
+  // ── 渲染菜單 ─────────────────────────────────────────
+  function renderMenu(){
+    document.getElementById('menuBox').innerHTML = MENU.map(cat=>`
+      <div class="cat-wrap">
+        <div class="cat-title">${cat.cat}</div>
+        <div class="drinks-grid">
+          ${cat.items.map(d=>`
+            <div class="dcard" id="dc-${encodeURIComponent(d.name)}" onclick='pickDrink(${JSON.stringify(JSON.stringify(d))})'>
+              <div class="dname">${d.name}</div>
+              <div class="dprice">M $${d.M}　L $${d.L}</div>
+              ${d.tea ? `<div class="dtag">▸ 選 ${d.teaLabel||'茶底'}</div>` : ''}
+            </div>`).join('')}
+        </div>
+      </div>`).join('');
+  }
 
-<!-- API Key Modal -->
-<div class="modal-overlay" id="modalOverlay" onclick="handleOverlayClick(event)">
-  <div class="modal">
-    <h2>🔑 設定 Anthropic API Key</h2>
-    <div class="modal-desc">
-      請至 <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a> 登入後，<br>
-      點「API Keys」→「Create Key」取得金鑰。<br><br>
-      Key 只存在此頁面，關閉頁面後即消失，不會上傳。
-    </div>
-    <input class="modal-input" id="apiKeyInput" type="password" placeholder="sk-ant-api03-...">
-    <div class="modal-btns">
-      <button class="modal-save" onclick="saveKey()">✓ 儲存</button>
-      <button class="modal-cancel" onclick="closeModal()">取消</button>
-    </div>
-  </div>
-</div>
+  function pickDrink(json){
+    const d = JSON.parse(json);
+    if(cart.length>0){ alert('每人限點 1 杯，請先移除後再重新選擇。'); return; }
+    document.querySelectorAll('.dcard').forEach(c=>c.classList.remove('selected'));
+    const el = document.getElementById('dc-'+encodeURIComponent(d.name));
+    if(el) el.classList.add('selected');
+    sel=d; selTea=d.tea?d.tea[0]:null; selSugar="半糖"; selIce="少冰"; selSize="M";
+    document.getElementById('optTitle').textContent = d.name;
+    renderOpts();
+    const p=document.getElementById('optPanel');
+    p.classList.add('show');
+    p.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
 
-<!-- Ticker Input -->
-<div class="input-zone">
-  <div class="input-group">
-    <label>輸入股票代號（台股或美股，按 Enter 快速加入）</label>
-    <input class="ticker-input" id="tickerInput" placeholder="例：2330、0050、AAPL、NVDA" maxlength="10">
-  </div>
-  <button class="btn btn-add" onclick="addTicker()">＋ 加入</button>
-  <button class="btn btn-run" id="runBtn" onclick="analyzeAll()" disabled>🤖 AI 分析全部</button>
-</div>
+  function renderOpts(){
+    const teaRow=document.getElementById('teaRow');
+    if(sel.tea){
+      teaRow.style.display='flex';
+      document.getElementById('teaDiv').innerHTML = sel.tea.map(t=>{
+        const cc=TEA_COLOR[t]||'';
+        return `<button class="obtn ${cc} ${t===selTea?'on':''}" onclick="window._setTea('${t}')">${t}</button>`;
+      }).join(' ');
+    } else { teaRow.style.display='none'; }
+    document.getElementById('sugarDiv').innerHTML = SUGARS.map(s=>`<button class="obtn ${s===selSugar?'on':''}" onclick="window._setSugar('${s}')">${s}</button>`).join(' ');
+    document.getElementById('iceDiv').innerHTML   = ICES.map(s=>`<button class="obtn ${s===selIce?'on':''}" onclick="window._setIce('${s}')">${s}</button>`).join(' ');
+    document.getElementById('sizeDiv').innerHTML  = ['M','L'].map(s=>`<button class="obtn ${s===selSize?'on':''}" onclick="window._setSize('${s}')">${s} $${sel[s]}</button>`).join(' ');
+  }
 
-<!-- Weight Panel -->
-<div class="weight-panel">
-  <div class="weight-title">⚖️ 動能加權調整</div>
-  <div class="weight-sliders">
-    <div class="weight-item">
-      <div class="weight-label">技術面 <span id="wTV">40</span>%</div>
-      <input type="range" class="rt" id="wT" min="0" max="100" value="40" oninput="updateW()">
-    </div>
-    <div class="weight-item">
-      <div class="weight-label">基本面 <span id="wFV">35</span>%</div>
-      <input type="range" class="rf" id="wF" min="0" max="100" value="35" oninput="updateW()">
-    </div>
-    <div class="weight-item">
-      <div class="weight-label">市場動能 <span id="wMV">25</span>%</div>
-      <input type="range" class="rm" id="wM" min="0" max="100" value="25" oninput="updateW()">
-    </div>
-  </div>
-  <div class="weight-right">
-    <div class="wsum ok" id="wsum">合計：100%</div>
-    <button class="btn-recalc" onclick="recompute()">↻ 重算</button>
-  </div>
-</div>
+  window._setTea   = v=>{selTea=v;   renderOpts();};
+  window._setSugar = v=>{selSugar=v; renderOpts();};
+  window._setIce   = v=>{selIce=v;   renderOpts();};
+  window._setSize  = v=>{selSize=v;  renderOpts();};
 
-<div class="chip-zone" id="chipZone"></div>
-<div class="cards-grid" id="cardsGrid">
-  <div class="empty-state">
-    <div class="empty-icon">📊</div>
-    <div class="empty-title">尚未加入股票</div>
-    <div>輸入股票代號後，點「AI 分析全部」</div>
-  </div>
-</div>
-<div class="info-note">⚠️ 本工具僅供教學與參考用途，分析結果基於 AI 推論，非即時報價，不構成投資建議。投資有風險，請謹慎評估。</div>
+  window._addToCart = ()=>{
+    if(!sel) return;
+    const displayName = sel.tea ? `${sel.name}（${selTea}）` : sel.name;
+    cart = [{name:displayName, sugar:selSugar, ice:selIce, size:selSize, price:sel[selSize]}];
+    document.querySelectorAll('.dcard').forEach(c=>c.classList.remove('selected'));
+    document.getElementById('optPanel').classList.remove('show');
+    sel=null;
+    renderCart();
+  };
 
-<script>
-'use strict';
-let tickers = [], results = {};
+  function renderCart(){
+    const el=document.getElementById('cartBox');
+    const btn=document.getElementById('subBtn');
+    if(!cart.length){
+      el.innerHTML='<div class="empty">尚未選擇飲料</div>';
+      btn.disabled=true; return;
+    }
+    btn.disabled=false;
+    el.innerHTML=cart.map((it,i)=>`
+      <div class="cart-item">
+        <button class="rm-btn" onclick="window._removeCart(${i})">✕</button>
+        <div class="ci-name">${it.name}（${it.size}）</div>
+        <div class="ci-detail">${it.sugar}・${it.ice}　$${it.price}</div>
+      </div>`).join('');
+  }
 
-// ── Modal ──────────────────────────────────────────────
-function openModal()  { document.getElementById('modalOverlay').classList.add('open'); document.getElementById('apiKeyInput').focus(); }
-function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); }
-function handleOverlayClick(e) { if(e.target===document.getElementById('modalOverlay')) closeModal(); }
-function saveKey() {
-  const v = document.getElementById('apiKeyInput').value.trim();
-  document.getElementById('keyDot').className = 'key-dot' + (v ? ' set' : '');
-  closeModal();
-}
-document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
+  window._removeCart = i=>{ cart.splice(i,1); renderCart(); };
 
-// ── Weights ────────────────────────────────────────────
-function getW() { return { t:+document.getElementById('wT').value, f:+document.getElementById('wF').value, m:+document.getElementById('wM').value }; }
-function updateW() {
-  const w = getW();
-  document.getElementById('wTV').textContent = w.t;
-  document.getElementById('wFV').textContent = w.f;
-  document.getElementById('wMV').textContent = w.m;
-  const sum = w.t+w.f+w.m, el = document.getElementById('wsum');
-  el.textContent = '合計：'+sum+'%';
-  el.className = 'wsum ' + (sum===100?'ok':'warn');
-}
-function calcScore(d, w) {
-  const sum = w.t+w.f+w.m;
-  if(!sum) return d.score||50;
-  return Math.round(((d.techScore||50)*w.t + (d.fundScore||50)*w.f + (d.momScore||50)*w.m) / sum);
-}
-function recompute() { tickers.forEach(t => { if(results[t]?.ok) renderCard(t); }); }
+  // ── 送出訂單 → 寫入 Firebase ─────────────────────────
+  window._submitOrder = async ()=>{
+    const name=document.getElementById('sName').value.trim();
+    const cls =document.getElementById('sClass').value.trim();
+    if(!name){ alert('請輸入學生姓名！'); document.getElementById('sName').focus(); return; }
+    if(!cart.length){ alert('請選擇飲料！'); return; }
+    const btn=document.getElementById('subBtn');
+    btn.disabled=true; btn.textContent='送出中…';
+    try{
+      await push(ordersRef, {
+        name, cls,
+        time: new Date().toLocaleString('zh-TW'),
+        item: cart[0]
+      });
+      cart=[];
+      document.getElementById('sName').value='';
+      document.getElementById('sClass').value='';
+      renderCart();
+      const msg=document.getElementById('successMsg');
+      msg.textContent=`✅ ${name} 的訂單已送出！`;
+      msg.style.display='block';
+      setTimeout(()=>msg.style.display='none', 3500);
+      window.scrollTo({top:0,behavior:'smooth'});
+    } catch(e){
+      alert('送出失敗，請確認網路連線或 Firebase 設定。\n'+e.message);
+    }
+    btn.disabled=false; btn.textContent='✅ 送出訂單';
+  };
 
-// ── Tickers ────────────────────────────────────────────
-const input   = document.getElementById('tickerInput');
-const runBtn  = document.getElementById('runBtn');
-input.addEventListener('keydown', e => { if(e.key==='Enter') addTicker(); });
+  // ── 切換頁籤 ─────────────────────────────────────────
+  window._switchTab = (tab, el)=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById(tab).classList.add('active');
+    if(tab==='stats') renderStats();
+  };
 
-function addTicker() {
-  const v = input.value.trim().toUpperCase();
-  if(!v) return;
-  if(tickers.includes(v)) { input.value=''; return; }
-  if(tickers.length>=8) { alert('最多加入 8 支股票'); return; }
-  tickers.push(v); input.value='';
-  renderChips(); runBtn.disabled=false;
-}
-function removeTicker(t) {
-  tickers = tickers.filter(x=>x!==t); delete results[t];
-  renderChips();
-  if(!tickers.length) { runBtn.disabled=true; showEmpty(); }
-  else rebuildCards();
-}
-function renderChips() {
-  document.getElementById('chipZone').innerHTML = tickers.map(t =>
-    `<div class="chip">${t}<span class="chip-x" onclick="removeTicker('${t}')"> ✕</span></div>`
-  ).join('');
-}
-function showEmpty() {
-  document.getElementById('cardsGrid').innerHTML = `<div class="empty-state"><div class="empty-icon">📊</div><div class="empty-title">尚未加入股票</div><div>輸入股票代號後，點「AI 分析全部」</div></div>`;
-}
+  // ── 統計頁 ───────────────────────────────────────────
+  function renderStats(){
+    const el=document.getElementById('statsBox');
+    const orders=Object.values(allOrders);
+    document.getElementById('totLbl').textContent=`共 ${orders.length} 筆訂單`;
+    if(!orders.length){ el.innerHTML='<div class="no-orders">尚無訂單資料</div>'; return; }
 
-// ── Analyze ────────────────────────────────────────────
-async function analyzeAll() {
-  const apiKey = document.getElementById('apiKeyInput').value.trim();
-  if(!apiKey) { openModal(); return; }
-  if(!tickers.length) return;
-
-  runBtn.disabled = true; runBtn.textContent = '⏳ 分析中...';
-  document.getElementById('cardsGrid').innerHTML = tickers.map(t =>
-    `<div class="loading-card" id="card-${t}"><div class="spinner"></div><div>分析 <b>${t}</b>...</div></div>`
-  ).join('');
-
-  await Promise.all(tickers.map(t => doAnalyze(t, apiKey)));
-  runBtn.disabled = false; runBtn.textContent = '🤖 AI 分析全部';
-}
-
-async function doAnalyze(ticker, apiKey) {
-  const prompt = `你是專業股票分析師。請分析「${ticker}」，只回傳JSON不要其他文字：
-{"ticker":"${ticker}","companyName":"公司名稱","price":"股價數字","change":"+1.5%","isUp":true,"signal":"BUY","pe":"本益比或N/A","rsi":"RSI值","ma20":"均線描述","volume":"成交量描述","reason":"分析理由120字內含風險提醒","techScore":65,"fundScore":70,"momScore":60,"score":65,"trendShort":"UP","trendShortStr":70,"trendShortDesc":"短線描述","trendMid":"FLAT","trendMidStr":55,"trendMidDesc":"中線描述","trendLong":"UP","trendLongStr":75,"trendLongDesc":"長線描述","momentumLevel":"MILD_UP","momentumDots":[1,0,1,1,-1,0,0,1,1,0]}
-signal只能是BUY/SELL/HOLD，trendShort/Mid/Long只能是UP/DOWN/FLAT，momentumLevel只能是STRONG_UP/MILD_UP/NEUTRAL/MILD_DOWN/STRONG_DOWN，台股分析台灣市場美股分析美國市場。`;
-
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type':              'application/json',
-        'x-api-key':                 apiKey,
-        'anthropic-version':         '2023-06-01',
-        'anthropic-dangerous-allow-browser': 'true'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 900,
-        messages: [{ role:'user', content: prompt }]
-      })
+    const dc={};
+    orders.forEach(o=>{
+      const it=o.item;
+      const key=`${it.name}(${it.size})`;
+      if(!dc[key]) dc[key]={count:0, details:{}, revenue:0};
+      dc[key].count++;
+      dc[key].revenue+=it.price;
+      const det=`${it.sugar}・${it.ice}`;
+      dc[key].details[det]=(dc[key].details[det]||0)+1;
     });
 
-    if(!res.ok) {
-      const err = await res.json().catch(()=>({error:{message:res.statusText}}));
-      const msg = err?.error?.message || res.statusText;
-      if(res.status===401) throw new Error('API Key 無效，請重新輸入正確的金鑰');
-      if(res.status===403) throw new Error('API Key 權限不足');
-      throw new Error(`API 錯誤 (${res.status}): ${msg}`);
-    }
+    const sorted=Object.entries(dc).sort((a,b)=>b[1].count-a[1].count);
+    const totalCups=sorted.reduce((s,[,v])=>s+v.count,0);
+    const totalRev =sorted.reduce((s,[,v])=>s+v.revenue,0);
 
-    const data  = await res.json();
-    const text  = data.content?.[0]?.text || '';
-    const clean = text.replace(/```json|```/g,'').trim();
-    results[ticker] = { ...JSON.parse(clean), ok:true };
-  } catch(e) {
-    results[ticker] = { ticker, ok:false, error: e.message };
-  }
-  renderCard(ticker);
-}
-
-// ── Render ─────────────────────────────────────────────
-const TC = { UP:'#00ff88', DOWN:'#ff4d6d', FLAT:'#4a6080' };
-const TA = { UP:'▲', DOWN:'▼', FLAT:'━' };
-const ML = {
-  STRONG_UP:   ['#00ff88',        '強勢上漲'],
-  MILD_UP:     ['rgba(0,255,136,.7)', '溫和上漲'],
-  NEUTRAL:     ['#4a6080',        '動能中性'],
-  MILD_DOWN:   ['rgba(255,77,109,.7)','溫和下跌'],
-  STRONG_DOWN: ['#ff4d6d',        '強勢下跌']
-};
-
-function renderCard(ticker) {
-  const d  = results[ticker];
-  const el = document.getElementById('card-'+ticker);
-  if(!el) return;
-
-  if(!d?.ok) {
-    el.outerHTML = `<div class="error-card" id="card-${ticker}">❌ 無法分析 <b>${ticker}</b><br><small style="opacity:.8">${d?.error||'未知錯誤'}</small></div>`;
-    return;
+    el.innerHTML=`
+      <div class="sum-grid">
+        <div class="scard"><div class="scard-lbl">總杯數</div><div class="scard-num">${totalCups}</div></div>
+        <div class="scard"><div class="scard-lbl">訂購人數</div><div class="scard-num">${orders.length}</div></div>
+        <div class="scard"><div class="scard-lbl">總金額</div><div class="scard-num">$${totalRev}</div></div>
+      </div>
+      <div class="sec-title">飲料統計（供廠商製作）</div>
+      ${sorted.map(([name,v])=>`
+        <div class="drink-stat">
+          <div class="ds-row"><span class="ds-name">${name}</span><span class="ds-count">× ${v.count}</span></div>
+          <div class="ds-detail">${Object.entries(v.details).map(([d,n])=>`${d} ×${n}`).join('　')}</div>
+        </div>`).join('')}
+      <div class="sec-title">個人訂單明細</div>
+      ${orders.map(o=>`
+        <div class="order-card">
+          <div class="oc-name">${o.name}${o.cls?`　<span class="cls-tag">${o.cls}</span>`:''}</div>
+          <div class="oc-drink">${o.item.name}（${o.item.size}）${o.item.sugar}・${o.item.ice}　$${o.item.price}</div>
+          <div class="oc-time">${o.time}</div>
+        </div>`).join('')}`;
   }
 
-  const w      = getW();
-  const wScore = Math.max(0,Math.min(100, calcScore(d,w)));
-  const tS     = Math.max(0,Math.min(100, d.techScore||50));
-  const fS     = Math.max(0,Math.min(100, d.fundScore||50));
-  const mS     = Math.max(0,Math.min(100, d.momScore||50));
-  const sc     = d.signal||'HOLD';
-  const bColor = wScore>=65?'#00ff88':wScore>=40?'#ffd60a':'#ff4d6d';
-  const [momC, momL] = ML[d.momentumLevel]||ML.NEUTRAL;
+  // ── 匯出 CSV ─────────────────────────────────────────
+  window._exportCSV = ()=>{
+    const orders=Object.values(allOrders);
+    if(!orders.length){ alert('尚無訂單'); return; }
+    let csv='\uFEFF姓名,班級,飲料,容量,甜度,冰塊,金額,時間\n';
+    orders.forEach(o=>{
+      const it=o.item;
+      csv+=`"${o.name}","${o.cls||''}","${it.name}","${it.size}","${it.sugar}","${it.ice}","${it.price}","${o.time}"\n`;
+    });
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+    a.download='50嵐訂單統計.csv';
+    a.click();
+  };
 
-  const trendRows = [
-    ['短期', d.trendShort, d.trendShortStr, d.trendShortDesc],
-    ['中期', d.trendMid,   d.trendMidStr,   d.trendMidDesc],
-    ['長期', d.trendLong,  d.trendLongStr,  d.trendLongDesc]
-  ].map(([lbl,dir,str,desc])=>{
-    const clr=TC[dir]||TC.FLAT, s=Math.max(0,Math.min(100,str||50));
-    return `<div class="trend-row">
-      <div class="trend-period">${lbl}</div>
-      <div class="trend-bg"><div class="trend-fill" style="width:${s}%;background:${clr}"></div></div>
-      <div class="trend-arr" style="color:${clr}">${TA[dir]||'━'}</div>
-      <div class="trend-desc" style="color:${clr}">${desc||''}</div>
-    </div>`;
-  }).join('');
+  // ── 清除所有訂單 ─────────────────────────────────────
+  window._clearAll = async ()=>{
+    const orders=Object.values(allOrders);
+    if(!orders.length){ alert('尚無訂單'); return; }
+    if(!confirm(`確定清除所有 ${orders.length} 筆訂單？此動作無法復原。`)) return;
+    await remove(ordersRef);
+  };
 
-  const dots = (Array.isArray(d.momentumDots)?d.momentumDots:[0,0,0,0,0,0,0,0,0,0]).slice(0,10);
-  const dotsH = dots.map(v=>`<div class="m-dot ${v>=1?'mu':v<=-1?'md':'n'}" title="${v>0?'漲':v<0?'跌':'平'}"></div>`).join('');
-
-  el.outerHTML = `
-  <div class="stock-card ${sc==='BUY'?'buy':sc==='SELL'?'sell':'hold'}" id="card-${ticker}">
-    <div class="card-header">
-      <div>
-        <div class="ticker-name">${d.ticker}</div>
-        <div class="company-name">${d.companyName||''}</div>
-      </div>
-      <div class="price-block">
-        <div class="price ${d.isUp?'up':'down'}">${d.price}</div>
-        <div class="chg ${d.isUp?'up':'down'}">${d.change}</div>
-      </div>
-    </div>
-    <div class="card-body">
-      <span class="sig-badge sig-${sc==='BUY'?'buy':sc==='SELL'?'sell':'hold'}">${sc==='BUY'?'🟢 建議買進':sc==='SELL'?'🔴 建議賣出':'🟡 持續觀察'}</span>
-      <div class="metrics">
-        <div class="metric"><div class="metric-label">本益比 P/E</div><div class="metric-value">${d.pe||'N/A'}</div></div>
-        <div class="metric"><div class="metric-label">RSI 強弱</div><div class="metric-value">${d.rsi||'N/A'}</div></div>
-        <div class="metric"><div class="metric-label">均線位置</div><div class="metric-value" style="font-size:13px;line-height:1.4">${d.ma20||''}</div></div>
-        <div class="metric"><div class="metric-label">成交量</div><div class="metric-value" style="font-size:13px;line-height:1.4">${d.volume||''}</div></div>
-      </div>
-      <div class="trend-section">
-        <div class="trend-title">📊 漲跌趨勢分析</div>
-        <div class="trend-rows">${trendRows}</div>
-        <div class="mom-row">
-          <div class="mom-label">近10日動能</div>
-          <div class="mom-dots">${dotsH}</div>
-          <div class="mom-text" style="color:${momC}">${momL}</div>
-        </div>
-      </div>
-      <div class="score-block">
-        <div class="score-hd">
-          <div class="score-lbl">⚖️ 加權分數（技${w.t}% 基${w.f}% 市${w.m}%）</div>
-          <div class="score-num" style="color:${bColor}">${wScore}/100</div>
-        </div>
-        <div class="bar-bg" style="margin-bottom:6px"><div class="bar-fg" style="width:${wScore}%;background:${bColor}"></div></div>
-        <div class="sub-bars">
-          <div class="sub-item" style="flex:${w.t}"><div class="bar-bg"><div class="bar-fg" style="width:${tS}%;background:#00d4ff"></div></div><div class="sub-lbl" style="color:#00d4ff">技術 ${tS}</div></div>
-          <div class="sub-item" style="flex:${w.f}"><div class="bar-bg"><div class="bar-fg" style="width:${fS}%;background:#b57aff"></div></div><div class="sub-lbl" style="color:#b57aff">基本 ${fS}</div></div>
-          <div class="sub-item" style="flex:${w.m}"><div class="bar-bg"><div class="bar-fg" style="width:${mS}%;background:#ff8c42"></div></div><div class="sub-lbl" style="color:#ff8c42">動能 ${mS}</div></div>
-        </div>
-      </div>
-      <div class="ai-reason">${d.reason||''}</div>
-    </div>
-  </div>`;
-}
-
-function rebuildCards() {
-  document.getElementById('cardsGrid').innerHTML = tickers.map(t=>`<div id="card-${t}"></div>`).join('');
-  tickers.forEach(t => { if(results[t]) renderCard(t); });
-}
+  // ── 初始化 ───────────────────────────────────────────
+  renderMenu();
+  renderCart();
 </script>
+
+<style>
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    background: #f7f5f0;
+    color: #1a1a1a;
+    min-height: 100vh;
+  }
+  .wrap{ max-width: 680px; margin: 0 auto; padding: 0 16px 60px; }
+
+  /* Header */
+  .header{
+    text-align:center; padding: 28px 0 20px;
+    background: #fff;
+    border-bottom: 1px solid #e8e4dc;
+    margin: 0 -16px 24px;
+    padding-left:16px; padding-right:16px;
+  }
+  .header h1{ font-size:22px; font-weight:600; color:#1a1a1a; }
+  .header p{ font-size:13px; color:#888; margin-top:5px; }
+
+  /* Tabs */
+  .tabs{ display:flex; border-bottom:1px solid #e8e4dc; margin-bottom:24px; }
+  .tab{
+    flex:1; padding:12px 0; font-size:14px; text-align:center; cursor:pointer;
+    color:#888; border-bottom:2px solid transparent; margin-bottom:-1px;
+    background:none; border-left:none; border-right:none; border-top:none;
+    font-weight:500;
+  }
+  .tab.active{ color:#BA7517; border-bottom:2px solid #BA7517; }
+
+  .section{ display:none; } .section.active{ display:block; }
+
+  /* Fields */
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:12px; color:#888; margin-bottom:5px; font-weight:500; }
+  .req{ color:#D85A30; }
+  .field input{
+    width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px;
+    font-size:14px; color:#1a1a1a; background:#fff; outline:none;
+  }
+  .field input:focus{ border-color:#BA7517; }
+
+  /* Category */
+  .cat-wrap{ margin-bottom:20px; }
+  .cat-title{
+    font-size:11px; font-weight:600; color:#BA7517; letter-spacing:.1em;
+    text-transform:uppercase; padding:6px 0; border-bottom:1px solid #e8e4dc;
+    margin-bottom:10px;
+  }
+  .drinks-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(145px,1fr)); gap:8px; }
+  .dcard{
+    border:1px solid #e8e4dc; border-radius:10px; padding:10px 12px;
+    cursor:pointer; background:#fff; transition:all .15s;
+  }
+  .dcard:hover{ border-color:#BA7517; box-shadow:0 2px 8px rgba(186,117,23,.1); }
+  .dcard.selected{ border:2px solid #BA7517; background:#fffbf5; }
+  .dname{ font-size:13px; font-weight:500; color:#1a1a1a; line-height:1.4; }
+  .dprice{ font-size:12px; color:#888; margin-top:3px; }
+  .dtag{ font-size:10px; color:#BA7517; margin-top:4px; font-weight:500; }
+
+  /* Options panel */
+  .opt-panel{
+    background:#fffbf5; border:1px solid #f0e4c8; border-radius:12px;
+    padding:16px; margin-top:12px; display:none;
+  }
+  .opt-panel.show{ display:block; }
+  .opt-title{ font-size:15px; font-weight:600; color:#1a1a1a; margin-bottom:14px; }
+  .opt-row{ display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .opt-lbl{ font-size:12px; color:#888; width:40px; flex-shrink:0; font-weight:500; }
+  .obtn{
+    padding:5px 12px; font-size:12px; border:1px solid #ddd; border-radius:20px;
+    cursor:pointer; background:#fff; color:#555; transition:all .15s;
+  }
+  .obtn:hover{ border-color:#BA7517; }
+  .obtn.on{ background:#BA7517; border-color:#BA7517; color:#fff; }
+  .obtn.tea-red.on  { background:#993C1D; border-color:#993C1D; }
+  .obtn.tea-green.on{ background:#3B6D11; border-color:#3B6D11; }
+  .obtn.tea-blue.on { background:#185FA5; border-color:#185FA5; }
+  .obtn.tea-oolong.on{ background:#5F5E5A; border-color:#5F5E5A; }
+
+  .add-btn{
+    width:100%; padding:11px; background:#BA7517; color:#fff; border:none;
+    border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; margin-top:10px;
+  }
+  .add-btn:hover{ background:#854F0B; }
+
+  /* Cart */
+  .cart-section{ margin-top:24px; }
+  .cart-title{ font-size:14px; font-weight:600; margin-bottom:10px; color:#1a1a1a; }
+  .empty{ color:#bbb; font-size:13px; padding:8px 0; }
+  .cart-item{
+    background:#fff; border:1px solid #e8e4dc; border-radius:10px;
+    padding:12px 14px; margin-bottom:8px; font-size:13px; position:relative;
+  }
+  .ci-name{ font-weight:500; color:#1a1a1a; }
+  .ci-detail{ color:#888; font-size:12px; margin-top:3px; }
+  .rm-btn{
+    position:absolute; right:12px; top:12px; background:none; border:none;
+    color:#ccc; cursor:pointer; font-size:16px; line-height:1;
+  }
+  .rm-btn:hover{ color:#D85A30; }
+
+  .submit-btn{
+    width:100%; padding:13px; background:#BA7517; color:#fff; border:none;
+    border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; margin-top:14px;
+  }
+  .submit-btn:hover{ background:#854F0B; }
+  .submit-btn:disabled{ background:#ddd; color:#aaa; cursor:not-allowed; }
+
+  .success-msg{
+    background:#ecf7e6; color:#3B6D11; border-radius:8px;
+    padding:12px 14px; font-size:13px; margin-bottom:14px; display:none;
+    border:1px solid #c4e4b0;
+  }
+
+  /* Stats */
+  .sc{ display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center; }
+  .ebtn{
+    padding:8px 14px; border:1px solid #e0d8cc; border-radius:8px;
+    font-size:13px; cursor:pointer; background:#fff; color:#555; font-weight:500;
+  }
+  .ebtn:hover{ background:#f7f5f0; }
+  .sum-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:20px; }
+  .scard{ background:#fff; border:1px solid #e8e4dc; border-radius:10px; padding:14px; }
+  .scard-lbl{ font-size:12px; color:#888; margin-bottom:4px; }
+  .scard-num{ font-size:24px; font-weight:600; color:#BA7517; }
+  .drink-stat{
+    background:#fff; border:1px solid #e8e4dc; border-radius:10px;
+    padding:12px 14px; margin-bottom:6px;
+  }
+  .ds-row{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px; }
+  .ds-name{ font-size:14px; font-weight:500; color:#1a1a1a; }
+  .ds-count{ font-size:22px; font-weight:600; color:#BA7517; }
+  .ds-detail{ font-size:12px; color:#888; line-height:1.8; }
+  .order-card{
+    border:1px solid #e8e4dc; border-radius:10px; padding:10px 14px; margin-bottom:6px;
+    background:#fff;
+  }
+  .oc-name{ font-size:13px; font-weight:500; color:#1a1a1a; }
+  .cls-tag{ font-weight:400; color:#888; font-size:12px; }
+  .oc-drink{ font-size:12px; color:#888; margin-top:3px; line-height:1.6; }
+  .oc-time{ font-size:11px; color:#bbb; margin-top:4px; }
+  .sec-title{ font-size:14px; font-weight:600; color:#1a1a1a; margin:20px 0 8px; }
+  .no-orders{ text-align:center; color:#bbb; font-size:13px; padding:40px 0; }
+  #totLbl{ font-size:13px; color:#aaa; }
+</style>
+
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>🧋 50嵐 線上訂飲料</h1>
+    <p>請填寫姓名後選擇飲料，每人限點 1 杯</p>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="_switchTab('order',this)">📋 訂購</button>
+    <button class="tab" onclick="_switchTab('stats',this)">📊 統計匯總</button>
+  </div>
+
+  <div id="order" class="section active">
+    <div id="successMsg" class="success-msg"></div>
+    <div class="field">
+      <label>學生姓名 <span class="req">*</span></label>
+      <input type="text" id="sName" placeholder="請輸入您的姓名">
+    </div>
+    <div class="field">
+      <label>班級（選填）</label>
+      <input type="text" id="sClass" placeholder="例：餐飲一甲">
+    </div>
+    <div id="menuBox"></div>
+    <div class="opt-panel" id="optPanel">
+      <div class="opt-title" id="optTitle"></div>
+      <div id="teaRow" class="opt-row" style="display:none">
+        <span class="opt-lbl">茶底</span>
+        <div id="teaDiv"></div>
+      </div>
+      <div class="opt-row"><span class="opt-lbl">甜度</span><div id="sugarDiv"></div></div>
+      <div class="opt-row"><span class="opt-lbl">冰塊</span><div id="iceDiv"></div></div>
+      <div class="opt-row"><span class="opt-lbl">容量</span><div id="sizeDiv"></div></div>
+      <button class="add-btn" onclick="_addToCart()">加入訂單</button>
+    </div>
+    <div class="cart-section">
+      <div class="cart-title">🛒 您的選擇</div>
+      <div id="cartBox"><div class="empty">尚未選擇飲料</div></div>
+      <button class="submit-btn" id="subBtn" disabled onclick="_submitOrder()">✅ 送出訂單</button>
+    </div>
+  </div>
+
+  <div id="stats" class="section">
+    <div class="sc">
+      <button class="ebtn" onclick="_exportCSV()">⬇ 匯出 CSV</button>
+      <button class="ebtn" onclick="_clearAll()">🗑 清除訂單</button>
+      <span id="totLbl"></span>
+    </div>
+    <div id="statsBox"></div>
+  </div>
+</div>
 </body>
 </html>
