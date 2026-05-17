@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>線上訂飲料-50嵐-東商</title>
+<title>50嵐 線上訂飲料</title>
 
 
 
@@ -153,6 +153,31 @@
   .sec-title{ font-size:14px; font-weight:600; color:#1a1a1a; margin:20px 0 8px; }
   .no-orders{ text-align:center; color:#bbb; font-size:13px; padding:40px 0; }
   #totLbl{ font-size:13px; color:#aaa; }
+
+  /* 密碼遮罩 */
+  #pwOverlay{
+    display:flex; align-items:center; justify-content:center;
+    padding: 40px 0;
+  }
+  .pw-box{
+    background:#fff; border:1px solid #e8e4dc; border-radius:16px;
+    padding:32px 28px; text-align:center; max-width:320px; width:100%;
+  }
+  .pw-icon{ font-size:36px; margin-bottom:12px; }
+  .pw-title{ font-size:16px; font-weight:600; color:#1a1a1a; margin-bottom:6px; }
+  .pw-desc{ font-size:13px; color:#888; margin-bottom:20px; }
+  #pwInput{
+    width:100%; padding:10px 14px; border:1px solid #ddd; border-radius:8px;
+    font-size:15px; text-align:center; letter-spacing:.2em; outline:none;
+    margin-bottom:12px;
+  }
+  #pwInput:focus{ border-color:#BA7517; }
+  .pw-btn{
+    width:100%; padding:11px; background:#BA7517; color:#fff; border:none;
+    border-radius:8px; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  .pw-btn:hover{ background:#854F0B; }
+  .pw-err{ font-size:13px; color:#D85A30; margin-top:10px; min-height:18px; }
 </style>
 
 <body>
@@ -175,7 +200,7 @@
     </div>
     <div class="field">
       <label>班級（選填）</label>
-      <input type="text" id="sClass" placeholder="例：應一甲或電一甲">
+      <input type="text" id="sClass" placeholder="例：餐飲一甲">
     </div>
     <div id="menuBox"></div>
     <div class="opt-panel" id="optPanel">
@@ -197,12 +222,27 @@
   </div>
 
   <div id="stats" class="section">
-    <div class="sc">
-      <button class="ebtn" onclick="window._exportCSV()">⬇ 匯出 CSV</button>
-      <button class="ebtn" onclick="window._clearAll()">🗑 清除訂單</button>
-      <span id="totLbl"></span>
+    <!-- 密碼遮罩 -->
+    <div id="pwOverlay">
+      <div class="pw-box">
+        <div class="pw-icon">🔒</div>
+        <div class="pw-title">統計匯總（教師專區）</div>
+        <div class="pw-desc">請輸入密碼以查看訂單統計</div>
+        <input type="password" id="pwInput" placeholder="請輸入密碼" onkeydown="if(event.key==='Enter')window._checkPw()">
+        <button class="pw-btn" onclick="window._checkPw()">確認</button>
+        <div id="pwErr" class="pw-err"></div>
+      </div>
     </div>
-    <div id="statsBox"></div>
+    <!-- 統計內容（解鎖後顯示） -->
+    <div id="statsContent" style="display:none">
+      <div class="sc">
+        <button class="ebtn" onclick="window._exportCSV()">⬇ 匯出 CSV</button>
+        <button class="ebtn" onclick="window._clearAll()">🗑 清除訂單</button>
+        <button class="ebtn" onclick="window._lockStats()">🔒 鎖定</button>
+        <span id="totLbl"></span>
+      </div>
+      <div id="statsBox"></div>
+    </div>
   </div>
 </div>
 <!-- ✅ 請至 Firebase Console 建立專案後，將下方設定替換為您自己的 -->
@@ -301,7 +341,8 @@
   // ── 即時監聽 Firebase ─────────────────────────────────
   onValue(ordersRef, snap => {
     allOrders = snap.val() || {};
-    const statsEl = document.getElementById('stats'); if(statsEl && statsEl.classList.contains('active')) renderStats();
+    const statsEl = document.getElementById('stats');
+    if(statsEl && statsEl.classList.contains('active') && statsUnlocked) renderStats();
   });
 
   // ── 渲染菜單 ─────────────────────────────────────────
@@ -411,12 +452,49 @@
   };
 
   // ── 切換頁籤 ─────────────────────────────────────────
+  let statsUnlocked = false;
+
   window._switchTab = (tab, el)=>{
     document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
     el.classList.add('active');
     document.getElementById(tab).classList.add('active');
-    if(tab==='stats') renderStats();
+    if(tab==='stats'){
+      if(statsUnlocked){
+        document.getElementById('pwOverlay').style.display='none';
+        document.getElementById('statsContent').style.display='block';
+        renderStats();
+      } else {
+        document.getElementById('pwOverlay').style.display='flex';
+        document.getElementById('statsContent').style.display='none';
+        setTimeout(()=>document.getElementById('pwInput').focus(), 100);
+      }
+    }
+  };
+
+  // 🔑 密碼設定（請改成您想要的密碼）
+  const STATS_PASSWORD = "teacher123";
+
+  window._checkPw = ()=>{
+    const val = document.getElementById('pwInput').value;
+    if(val === STATS_PASSWORD){
+      statsUnlocked = true;
+      document.getElementById('pwOverlay').style.display='none';
+      document.getElementById('statsContent').style.display='block';
+      document.getElementById('pwInput').value='';
+      document.getElementById('pwErr').textContent='';
+      renderStats();
+    } else {
+      document.getElementById('pwErr').textContent='密碼錯誤，請再試一次';
+      document.getElementById('pwInput').value='';
+      document.getElementById('pwInput').focus();
+    }
+  };
+
+  window._lockStats = ()=>{
+    statsUnlocked = false;
+    document.getElementById('pwOverlay').style.display='flex';
+    document.getElementById('statsContent').style.display='none';
   };
 
   // ── 統計頁 ───────────────────────────────────────────
