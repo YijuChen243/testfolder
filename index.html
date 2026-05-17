@@ -11,14 +11,14 @@
   import { getDatabase, ref, push, onValue, remove, get } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
   // 🔧 替換成您的 Firebase 設定
-   const firebaseConfig = {
-    apiKey: "AIzaSyCri00tBFokcFKULLEX1twz4VeZFpMFRqc",
-    authDomain: "drink50-aec15.firebaseapp.com",
-    projectId: "drink50-aec15",
-    storageBucket: "drink50-aec15.firebasestorage.app",
-    messagingSenderId: "1001845497104",
-    appId: "1:1001845497104:web:f00abe0a36bd189642d995"
-  };
+  const firebaseConfig = {
+  apiKey: "AIzaSyCri00tBFokcFKULLEX1twz4VeZFpMFRqc",
+  authDomain: "drink50-aec15.firebaseapp.com",
+  projectId: "drink50-aec15",
+  storageBucket: "drink50-aec15.firebasestorage.app",
+  messagingSenderId: "1001845497104",
+  appId: "1:1001845497104:web:f00abe0a36bd189642d995"
+};
 
   const app = initializeApp(firebaseConfig);
   const db  = getDatabase(app);
@@ -111,7 +111,7 @@
         <div class="cat-title">${cat.cat}</div>
         <div class="drinks-grid">
           ${cat.items.map(d=>`
-            <div class="dcard" id="dc-${encodeURIComponent(d.name)}" onclick='pickDrink(${JSON.stringify(JSON.stringify(d))})'>
+            <div class="dcard" id="dc-${encodeURIComponent(d.name)}" onclick='window._pickDrink(${JSON.stringify(JSON.stringify(d))})'>
               <div class="dname">${d.name}</div>
               <div class="dprice">M $${d.M}　L $${d.L}</div>
               ${d.tea ? `<div class="dtag">▸ 選 ${d.teaLabel||'茶底'}</div>` : ''}
@@ -120,7 +120,7 @@
       </div>`).join('');
   }
 
-  function pickDrink(json){
+  window._pickDrink = function(json){
     const d = JSON.parse(json);
     if(cart.length>0){ alert('每人限點 1 杯，請先移除後再重新選擇。'); return; }
     document.querySelectorAll('.dcard').forEach(c=>c.classList.remove('selected'));
@@ -132,7 +132,7 @@
     const p=document.getElementById('optPanel');
     p.classList.add('show');
     p.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }
+  };
 
   function renderOpts(){
     const teaRow=document.getElementById('teaRow');
@@ -446,8 +446,8 @@
   </div>
 
   <div class="tabs">
-    <button class="tab active" onclick="_switchTab('order',this)">📋 訂購</button>
-    <button class="tab" onclick="_switchTab('stats',this)">📊 統計匯總</button>
+    <button class="tab active" onclick="window._switchTab('order',this)">📋 訂購</button>
+    <button class="tab" onclick="window._switchTab('stats',this)">📊 統計匯總</button>
   </div>
 
   <div id="order" class="section active">
@@ -458,7 +458,7 @@
     </div>
     <div class="field">
       <label>班級（選填）</label>
-      <input type="text" id="sClass" placeholder="例：應一甲或電一甲">
+      <input type="text" id="sClass" placeholder="例：電一甲或應一甲">
     </div>
     <div id="menuBox"></div>
     <div class="opt-panel" id="optPanel">
@@ -470,19 +470,19 @@
       <div class="opt-row"><span class="opt-lbl">甜度</span><div id="sugarDiv"></div></div>
       <div class="opt-row"><span class="opt-lbl">冰塊</span><div id="iceDiv"></div></div>
       <div class="opt-row"><span class="opt-lbl">容量</span><div id="sizeDiv"></div></div>
-      <button class="add-btn" onclick="_addToCart()">加入訂單</button>
+      <button class="add-btn" onclick="window._addToCart()">加入訂單</button>
     </div>
     <div class="cart-section">
       <div class="cart-title">🛒 您的選擇</div>
       <div id="cartBox"><div class="empty">尚未選擇飲料</div></div>
-      <button class="submit-btn" id="subBtn" disabled onclick="_submitOrder()">✅ 送出訂單</button>
+      <button class="submit-btn" id="subBtn" disabled onclick="window._submitOrder()">✅ 送出訂單</button>
     </div>
   </div>
 
   <div id="stats" class="section">
     <div class="sc">
-      <button class="ebtn" onclick="_exportCSV()">⬇ 匯出 CSV</button>
-      <button class="ebtn" onclick="_clearAll()">🗑 清除訂單</button>
+      <button class="ebtn" onclick="window._exportCSV()">⬇ 匯出 CSV</button>
+      <button class="ebtn" onclick="window._clearAll()">🗑 清除訂單</button>
       <span id="totLbl"></span>
     </div>
     <div id="statsBox"></div>
